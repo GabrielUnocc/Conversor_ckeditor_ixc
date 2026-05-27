@@ -237,15 +237,25 @@ function runToHTML(rEl) {
   for (var i = 0; i < rEl.children.length; i++) {
     var c = rEl.children[i], ln = getLN(c);
     if (ln === 't') {
-      var t = c.textContent;
-      // Preserva espacos: substitui espaco por &nbsp; apenas quando e o unico conteudo do run
-      // para evitar que o browser colapse espacos entre runs
-      t = t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      text += t;
+      var raw = c.textContent;
+      // O atributo xml:space="preserve" usa o namespace XML padrao.
+      // No DOMParser do browser, precisa de getAttributeNS para le-lo.
+      // Alem disso, qualquer texto que seja so espacos deve ser preservado,
+      // pois o browser pode colapsar espacos ao renderizar o HTML.
+      // Solucao: converte espacos para non-breaking space (\u00a0) quando
+      // o atributo xml:space=preserve esta presente OU o texto e so espacos.
+      var xmlSpace = c.getAttributeNS('http://www.w3.org/XML/1998/namespace', 'space')
+                  || c.getAttribute('xml:space')
+                  || '';
+      var isOnlySpaces = raw.length > 0 && raw.replace(/ /g, '').length === 0;
+      if (xmlSpace === 'preserve' || isOnlySpaces) {
+        raw = raw.replace(/ /g, '\u00a0');
+      }
+      raw = raw.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      text += raw;
     }
     if (ln === 'br') text += '<br>';
   }
-  // So descarta se completamente vazio (nem espaco)
   if (text === '') return '';
   var rPr = getChild(rEl, 'rPr');
   if (rPr) {
@@ -253,8 +263,7 @@ function runToHTML(rEl) {
     var italic = getChild(rPr, 'i') || getChild(rPr, 'iCs');
     var under  = getChild(rPr, 'u');
     var uVal   = under ? (getWAttr(under, 'val') || '') : '';
-    // Nao aplica formatacao em runs que sao so espaco
-    if (text.trim()) {
+    if (text.replace(/\u00a0/g, '').trim()) {
       if (under && uVal !== 'none') text = '<u>' + text + '</u>';
       if (italic) text = '<em>' + text + '</em>';
       if (bold)   text = '<strong>' + text + '</strong>';
