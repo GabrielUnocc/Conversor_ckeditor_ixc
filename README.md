@@ -18,7 +18,7 @@ Provedores de internet que usam o **IXC Provedor** precisam cadastrar modelos de
 
 | Situação | Antes | Depois |
 |---|---|---|
-| Tempo de cadastro | 20–40 min | 2–5 min |
+| Tempo de cadastro | 60–120 min | 2–5 min |
 | Tabelas quebradas na impressão | Frequente | Eliminado |
 | Palavras coladas / sem espaço | Frequente | Eliminado |
 | Alinhamento perdido | Frequente | Preservado |
