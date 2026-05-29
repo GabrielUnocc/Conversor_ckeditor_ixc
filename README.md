@@ -206,7 +206,3 @@ README.md            # este arquivo
 | Arquivos `.doc` (formato legado) | Não suportados — converta para `.docx` no Word antes |
 
 ---
-
-## Licença
-
-MIT — veja o arquivo [LICENSE](LICENSE) para detalhes.
