@@ -6,7 +6,7 @@ Este arquivo descreve o projeto para que o Claude entenda o contexto, as decisõ
 
 ## O que é este projeto
 
-Ferramenta web em arquivo HTML único (`conversor_ixc.html`) que converte documentos Word (`.docx`) para HTML compatível com o CKEditor do sistema **IXC Provedor**, usado por provedores de internet.
+Ferramenta web em arquivo HTML único (`index.html`) que converte documentos Word (`.docx`) para HTML compatível com o CKEditor do sistema **IXC Provedor**, usado por provedores de internet.
 
 Funciona **100% offline** — sem servidor, sem backend, sem instalação. Basta abrir o arquivo no navegador.
 
@@ -28,7 +28,7 @@ Esta ferramenta resolve o problema convertendo o XML interno do `.docx` diretame
 ## Arquivo principal
 
 ```
-conversor_ixc.html   ← único arquivo, tudo dentro dele
+index.html   ← único arquivo, tudo dentro dele (servido como página inicial do site)
 ```
 
 Não há dependências locais. A única lib externa é o **JSZip** carregado via CDN:
@@ -150,12 +150,12 @@ Servir o arquivo estático com Nginx ou Python:
 
 ```bash
 # Nginx
-sudo cp conversor_ixc.html /var/www/html/
-# acesso: http://IP-DA-VM/conversor_ixc.html
+sudo cp index.html /var/www/html/
+# acesso: http://IP-DA-VM/
 
 # Python (dev)
 python3 -m http.server 8080
-# acesso: http://IP-DA-VM:8080/conversor_ixc.html
+# acesso: http://IP-DA-VM:8080/
 ```
 
 > **Atenção:** `navigator.clipboard` só funciona em HTTPS ou localhost. Em HTTP, o fallback `execCommand` é usado automaticamente.

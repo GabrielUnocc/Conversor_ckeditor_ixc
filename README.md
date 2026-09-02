@@ -169,14 +169,14 @@ Não há Mammoth, não há backend, não há build step — apenas HTML, CSS e J
 
 A ferramenta é um único arquivo HTML e roda direto do disco:
 
-1. Baixe o `conversor_ixc.html`
+1. Baixe o `index.html`
 2. Abra no Chrome ou Edge
 
 Para servir em rede local durante testes:
 
 ```bash
 python3 -m http.server 8080
-# Acesse: http://localhost:8080/conversor_ixc.html
+# Acesse: http://localhost:8080/index.html
 ```
 
 > **Atenção:** em HTTP puro (sem HTTPS), o botão **Copiar HTML** usa um fallback via `execCommand`, que funciona normalmente. A API `navigator.clipboard` exige HTTPS ou `localhost`.
@@ -186,7 +186,7 @@ python3 -m http.server 8080
 ## Estrutura do repositório
 
 ```
-conversor_ixc.html   # a ferramenta completa — único arquivo, sem dependências locais
+index.html           # a ferramenta completa — único arquivo, sem dependências locais
 CLAUDE.md            # contexto técnico detalhado (arquitetura, regras e histórico de bugs)
 README.md            # este arquivo
 ```
