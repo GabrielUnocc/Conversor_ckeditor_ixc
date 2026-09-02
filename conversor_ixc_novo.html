@@ -14,21 +14,11 @@
   --accentbg:rgba(59,130,246,.05);--accentbgh:rgba(59,130,246,.06);
 }
 body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;flex-direction:column}
-header{border-bottom:1px solid var(--border);padding:12px 20px;display:flex;align-items:center;gap:12px;background:var(--surface);flex-shrink:0;flex-wrap:wrap;row-gap:8px}
+header{border-bottom:1px solid var(--border);padding:12px 20px;display:flex;align-items:center;gap:12px;background:var(--surface);flex-shrink:0}
 .logo{width:32px;height:32px;background:linear-gradient(135deg,var(--accent),var(--accent2));border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;transition:background .3s}
 .hinfo h1{font-size:13px;font-weight:500}
 .hinfo span{font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace}
-.header-links{display:flex;gap:8px;align-items:center;margin-left:auto}
-.hlink{font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--muted);text-decoration:none;display:inline-flex;align-items:center;gap:5px;padding:5px 11px;border-radius:7px;border:1px solid var(--border);background:transparent;transition:all .2s;white-space:nowrap}
-.hlink:hover{color:var(--accent2);border-color:var(--accent)}
-.hlink[hidden]{display:none}
-.version-switcher{display:flex;gap:8px;align-items:center}
-.ver-pick{padding:13px 14px;border-bottom:1px solid var(--border);background:var(--surface2);flex-shrink:0}
-.ver-pick-label{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:500;margin-bottom:8px}
-.ver-pick .vs-btn{flex:1;padding:9px 0;border-radius:8px;font-size:12px}
-.ver-help{display:block;margin-top:10px;font-size:11px;line-height:1.45;color:var(--accent2);text-decoration:none}
-.ver-help:hover{text-decoration:underline}
-.ver-help[hidden]{display:none}
+.version-switcher{display:flex;gap:6px;margin-left:auto;align-items:center}
 .vs-label{font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace;margin-right:4px}
 .vs-btn{padding:5px 14px;border-radius:20px;font-size:11px;font-weight:600;font-family:'IBM Plex Sans',sans-serif;cursor:pointer;border:1.5px solid var(--border);background:transparent;color:var(--muted);transition:all .2s}
 .vs-btn.active{background:var(--accent);border-color:var(--accent);color:#fff}
@@ -70,13 +60,16 @@ main{flex:1;display:grid;grid-template-columns:290px 1fr;overflow:hidden;height:
 .sbar.loading .ind{background:var(--accent);animation:pulse 1s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 .right{display:flex;flex-direction:column;overflow:hidden}
-.tabs{display:flex;border-bottom:1px solid var(--border);background:var(--surface2);flex-shrink:0;align-items:center}
-.tab-actions{margin-left:auto;display:flex;align-items:center;gap:7px;padding:0 10px}
-.tab-actions .cc{margin-left:0}
-.tab-actions .btn{padding:6px 12px}
+.tabs{display:flex;align-items:center;border-bottom:1px solid var(--border);background:var(--surface2);flex-shrink:0}
 .tab{padding:9px 15px;font-size:11px;font-family:'IBM Plex Mono',monospace;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;transition:color .15s,border-color .15s}
 .tab.active{color:var(--accent2);border-bottom-color:var(--accent2)}
 .tab:hover:not(.active){color:var(--text)}
+.tab-link{margin-left:auto;display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:7px;font-size:11px;font-weight:600;font-family:'IBM Plex Sans',sans-serif;text-decoration:none;color:#fff;background:linear-gradient(135deg,var(--accent),var(--accent2));white-space:nowrap;transition:filter .15s,transform .15s}
+.tab-link:hover{filter:brightness(1.1);transform:translateY(-1px)}
+.btn-copy-top{margin:0 10px;padding:6px 14px;border-radius:7px;font-size:11px;font-weight:600;font-family:'IBM Plex Sans',sans-serif;cursor:pointer;border:none;color:#fff;background:var(--accent);white-space:nowrap;transition:filter .15s}
+.btn-copy-top:hover:not(:disabled){filter:brightness(1.1)}
+.btn-copy-top:disabled{opacity:.4;cursor:not-allowed}
+.btn-copy-top.cok{background:var(--success)!important;color:#fff!important}
 .tc{display:none;flex:1;overflow:auto;min-height:0}
 .tc.active{display:flex;flex-direction:column}
 #prevC{background:#fff;padding:34px 42px;color:#111;font-family:'Times New Roman',serif;font-size:12pt;line-height:1.5;flex:1;overflow:auto}
@@ -114,36 +107,18 @@ main{flex:1;display:grid;grid-template-columns:290px 1fr;overflow:hidden;height:
   <div class="logo" id="headerLogo">&#128196;</div>
   <div class="hinfo">
     <h1 id="headerTitle">Conversor DOCX &rarr; CKEditor</h1>
-    <span id="headerSub">IXC Provedor &middot; Convers&atilde;o de contratos Word para o CKEditor</span>
+    <span id="headerSub">IXC Provedor &middot; Funciona offline &middot; Formato nativo com bordas</span>
   </div>
-
-  <!-- ============================================================
-       LINK DO CABECALHO (opcional) — Tutorial em video
-       Vem OCULTO por padrao (atributo "hidden"). Para ativar:
-         1. Coloque a URL do video dentro de href="..."
-         2. Remova a palavra  hidden  da tag <a>
-       ============================================================ -->
-  <div class="header-links">
-    <a class="hlink" id="linkVideo" href="" target="_blank" rel="noopener" hidden>&#9654; Tutorial em v&iacute;deo</a>
+  <div class="version-switcher">
+    <span class="vs-label">Vers&atilde;o:</span>
+    <button class="vs-btn active" id="btnCK5">CKEditor 5</button>
+    <button class="vs-btn ck4"   id="btnCK4">CKEditor 4</button>
   </div>
 </header>
 
 <main>
   <div class="left">
-    <!-- PASSO 1: escolha da versao do editor (decisao de maior impacto) -->
-    <div class="ver-pick">
-      <div class="ver-pick-label">Vers&atilde;o do seu editor de contrato</div>
-      <div class="version-switcher">
-        <button class="vs-btn active" id="btnCK5">CKEditor 5</button>
-        <button class="vs-btn ck4"    id="btnCK4">CKEditor 4</button>
-      </div>
-      <!-- Frase de ajuda: link para uma pagina que ensina o cliente a descobrir
-           se o editor dele e a versao 4 ou 5. Vem OCULTA (hidden) ate voce por a
-           URL. Para ativar: coloque a URL dentro de href="..." e remova a
-           palavra  hidden  da tag <a>. -->
-      <a class="ver-help" id="linkVersao" href="" target="_blank" rel="noopener" hidden>N&atilde;o sabe qual &eacute; a vers&atilde;o do seu editor? Clique aqui</a>
-    </div>
-    <div class="ph"><div class="dot"></div><span>Arquivo</span></div>
+    <div class="ph"><div class="dot"></div><span>Arquivo &middot; Entrada</span></div>
     <div id="finfo" class="finfo">
       <span>&#128221;</span>
       <span class="fn" id="fname">&mdash;</span>
@@ -151,7 +126,7 @@ main{flex:1;display:grid;grid-template-columns:290px 1fr;overflow:hidden;height:
     </div>
     <div class="drop" id="dz">
       <div class="drop-icon">&#128194;</div>
-      <h2>Arraste um .docx aqui</h2>
+      <h2>Arraste qualquer .docx aqui</h2>
       <p>Contratos, modelos, termos.<br>Qualquer documento Word.</p>
       <button class="btn-up" id="btnSelectFile">Selecionar arquivo</button>
       <input type="file" id="fi" accept=".docx">
@@ -169,11 +144,8 @@ main{flex:1;display:grid;grid-template-columns:290px 1fr;overflow:hidden;height:
     <div class="tabs">
       <div class="tab active" data-tab="Prev">&#128065; Preview</div>
       <div class="tab" data-tab="Html">&lt;/&gt; HTML para CKEditor</div>
-      <div class="tab-actions">
-        <span class="cc" id="cc"></span>
-        <button class="btn bs" id="btnClear">&#128465; Limpar</button>
-        <button class="btn bp" id="btnCopy" disabled>&#128203; Copiar HTML</button>
-      </div>
+      <a class="tab-link" id="btnTutorial" href="COLOQUE_AQUI_O_LINK_DO_DRIVE" target="_blank" rel="noopener noreferrer">&#127909; Como usar o conversor</a>
+      <button class="btn-copy-top" id="btnCopyTop" disabled>&#128203; Copiar HTML</button>
     </div>
     <div class="tc active" id="tabPrev">
       <div id="prevC">
@@ -186,6 +158,11 @@ main{flex:1;display:grid;grid-template-columns:290px 1fr;overflow:hidden;height:
     </div>
     <div class="tc" id="tabHtml">
       <div id="htmlC"><textarea id="htmlCode" readonly></textarea></div>
+    </div>
+    <div class="acts">
+      <button class="btn bp" id="btnCopy" disabled>&#128203; Copiar HTML</button>
+      <button class="btn bs" id="btnClear">&#128465; Limpar</button>
+      <span class="cc" id="cc"></span>
     </div>
   </div>
 </main>
@@ -207,14 +184,14 @@ var MODES = {
     accent:'#3b82f6', accent2:'#22d3ee',
     accentbg:'rgba(59,130,246,.05)', accentbgh:'rgba(59,130,246,.06)',
     btnExtra:'', label:'CKEditor 5',
-    info:'<strong>Modo CKEditor 5</strong> &mdash; Use se o editor de contratos do seu IXC for a vers&atilde;o 5.',
+    info:'<strong>Modo CKEditor 5</strong> &mdash; Gera <code>&lt;figure class="table"&gt;</code> + <code>ck-table-resized</code> + <code>border-color:#000000</code>.',
     codeColor:'#a5f3fc'
   },
   ck4: {
     accent:'#f59e0b', accent2:'#fbbf24',
     accentbg:'rgba(245,158,11,.05)', accentbgh:'rgba(245,158,11,.06)',
     btnExtra:'ck4-style', label:'CKEditor 4',
-    info:'<strong>Modo CKEditor 4</strong> &mdash; Use se o editor de contratos do seu IXC for a vers&atilde;o 4.',
+    info:'<strong>Modo CKEditor 4</strong> &mdash; Gera <code>&lt;table border="1" cellpadding="1" cellspacing="1" style="width:100%;"&gt;</code>.',
     codeColor:'#fcd34d'
   }
 };
@@ -235,6 +212,9 @@ function setMode(mode) {
   document.getElementById('headerTitle').textContent = 'Conversor DOCX \u2192 ' + m.label;
   document.getElementById('modeInfo').innerHTML      = m.info;
   document.getElementById('btnCopy').className       = 'btn bp ' + m.btnExtra;
+  var topCopy = document.getElementById('btnCopyTop');
+  topCopy.style.background = m.accent;
+  topCopy.style.color      = (mode === 'ck4') ? '#111' : '#fff';
   document.getElementById('htmlCode').style.color    = m.codeColor;
   document.getElementById('headerLogo').style.background =
     'linear-gradient(135deg,' + m.accent + ',' + m.accent2 + ')';
@@ -263,41 +243,47 @@ function getWAttr(el, name) {
   return el.getAttributeNS(W, name) || el.getAttribute('w:' + name) || el.getAttribute(name);
 }
 
-// Extrai os dados de um <w:r>: texto (ja escapado) + formatacao (b/i/u).
-// NAO envolve em tags aqui de proposito -- quem envolve e paraToHTML, e
-// somente DEPOIS de juntar runs vizinhos de mesma formatacao (ver Bug 6
-// no comentario de paraToHTML). Retorna null se o run nao tem texto.
-function parseRun(rEl) {
-  var raw = '';
+function runToHTML(rEl) {
+  var text = '';
   for (var i = 0; i < rEl.children.length; i++) {
     var c = rEl.children[i], ln = getLN(c);
     if (ln === 't') {
-      var t = c.textContent;
-      // Espaco UNICO entre palavras SEMPRE permanece espaco normal (quebravel).
-      // Converter espaco unico para \u00a0 tira todos os pontos de quebra do
-      // paragrafo e faz o TCPDF cortar palavras no meio ao imprimir o PDF
-      // (Bug 5: "caracteri|sticas"). So convertemos para \u00a0 quando o run
-      // tem 2 OU MAIS espacos -- caso raro de espacos multiplos (recuo /
-      // alinhamento) que o HTML colapsaria em um so.
-      if (t.length > 1 && t.replace(/ /g, '').length === 0) {
-        t = t.replace(/ /g, '\u00a0');
+      var raw = c.textContent;
+      // Importante: NAO usar o atributo xml:space="preserve" como gatilho aqui.
+      // O Word marca xml:space="preserve" em praticamente todo run que e
+      // so espaco entre palavras -- isso e normal e nao significa nada
+      // especial. Se convertermos esses espacos para non-breaking space
+      // (\u00a0), o texto perde a capacidade de quebrar linha e justificar
+      // normalmente, gerando espacamento gigante e irregular ao justificar.
+      //
+      // O UNICO caso que precisa de protecao e quando um run e
+      // INTEIRAMENTE espaco(s) -- porque mais abaixo paraToHTML/docToHTML
+      // fazem .trim() no texto final do paragrafo, o que removeria esse
+      // espaco se ele fosse o primeiro ou ultimo caractere do paragrafo.
+      // Por isso so o substituimos por \u00a0 nesse caso especifico.
+      var isOnlySpaces = raw.length > 0 && raw.replace(/ /g, '').length === 0;
+      if (isOnlySpaces) {
+        raw = raw.replace(/ /g, '\u00a0');
       }
-      t = t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      raw += t;
+      raw = raw.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      text += raw;
     }
-    if (ln === 'br') raw += '<br>';
+    if (ln === 'br') text += '<br>';
   }
-  if (raw === '') return null;
+  if (text === '') return '';
   var rPr = getChild(rEl, 'rPr');
-  var bold = false, italic = false, underOn = false;
   if (rPr) {
-    bold   = !!(getChild(rPr, 'b') || getChild(rPr, 'bCs'));
-    italic = !!(getChild(rPr, 'i') || getChild(rPr, 'iCs'));
-    var under = getChild(rPr, 'u');
-    var uVal  = under ? (getWAttr(under, 'val') || '') : '';
-    underOn = !!(under && uVal !== 'none');
+    var bold   = getChild(rPr, 'b') || getChild(rPr, 'bCs');
+    var italic = getChild(rPr, 'i') || getChild(rPr, 'iCs');
+    var under  = getChild(rPr, 'u');
+    var uVal   = under ? (getWAttr(under, 'val') || '') : '';
+    if (text.replace(/\u00a0/g, '').trim()) {
+      if (under && uVal !== 'none') text = '<u>' + text + '</u>';
+      if (italic) text = '<em>' + text + '</em>';
+      if (bold)   text = '<strong>' + text + '</strong>';
+    }
   }
-  return { text: raw, b: bold, i: italic, u: underOn };
+  return text;
 }
 
 function paraToHTML(pEl) {
@@ -314,67 +300,15 @@ function paraToHTML(pEl) {
     }
   }
 
-  // 1) Coleta os runs do paragrafo (inclusive dentro de hyperlink) como "pecas".
-  var pieces = [];
+  var html = '';
   for (var i = 0; i < pEl.children.length; i++) {
     var c = pEl.children[i], ln = getLN(c);
-    if (ln === 'r') {
-      var pr = parseRun(c);
-      if (pr) pieces.push(pr);
-    } else if (ln === 'hyperlink') {
+    if (ln === 'r') html += runToHTML(c);
+    if (ln === 'hyperlink') {
       for (var j = 0; j < c.children.length; j++) {
-        if (getLN(c.children[j]) === 'r') {
-          var ph = parseRun(c.children[j]);
-          if (ph) pieces.push(ph);
-        }
+        if (getLN(c.children[j]) === 'r') html += runToHTML(c.children[j]);
       }
     }
-  }
-
-  // 2) Junta pecas VIZINHAS de mesma formatacao em uma so.
-  //
-  // ATENCAO (Bug 6): muitos .docx colocam cada palavra -- e ate cada espaco
-  // entre elas -- em um <w:r> separado. Se envolvermos cada run em sua propria
-  // tag, o resultado fica "<strong>TERMO</strong> <strong>DE</strong>...", com
-  // o espaco solto ENTRE duas tags. O TCPDF DESCARTA espaco comum que fica
-  // entre duas tags inline, grudando as palavras no PDF ("TERMODEADESAO").
-  // Juntando os runs de mesma formatacao geramos "<strong>TERMO DE</strong>",
-  // com o espaco DENTRO da tag: o TCPDF preserva e ele continua quebravel.
-  var merged = [];
-  for (var p = 0; p < pieces.length; p++) {
-    var pc = pieces[p];
-    var last = merged.length ? merged[merged.length - 1] : null;
-    if (last && last.b === pc.b && last.i === pc.i && last.u === pc.u) {
-      last.text += pc.text;
-    } else {
-      merged.push({ text: pc.text, b: pc.b, i: pc.i, u: pc.u });
-    }
-  }
-
-  // 3) Caso raro: uma peca formada so por espaco(s), com formatacao diferente
-  // das duas vizinhas, sobra solta entre dois grupos formatados. Para nao
-  // virar espaco comum entre tags (que o TCPDF descartaria), troca por \u00a0.
-  for (var m = 0; m < merged.length; m++) {
-    var g = merged[m];
-    if (g.text.replace(/\u00a0/g, '').trim() === '') {
-      var prev = merged[m - 1], next = merged[m + 1];
-      var prevFmt = prev && (prev.b || prev.i || prev.u);
-      var nextFmt = next && (next.b || next.i || next.u);
-      if (prevFmt && nextFmt) g.text = g.text.replace(/ /g, '\u00a0');
-    }
-  }
-
-  // 4) Emite cada grupo, envolvendo em <strong>/<em>/<u> conforme a formatacao.
-  var html = '';
-  for (var e = 0; e < merged.length; e++) {
-    var gg = merged[e];
-    var t = gg.text;
-    if (t.replace(/\u00a0/g, '').trim()) {
-      if (gg.u) t = '<u>' + t + '</u>';
-      if (gg.i) t = '<em>' + t + '</em>';
-      if (gg.b) t = '<strong>' + t + '</strong>';
-    }
-    html += t;
   }
 
   // Retorna objeto com texto e alinhamento para uso em docToHTML
@@ -435,56 +369,13 @@ function fixLastCellSpan(lastCellHTML, currentColspan, missing) {
   return lastCellHTML.replace('<td', '<td colspan="' + newSpan + '"');
 }
 
-// Le as larguras REAIS das colunas no <w:tblGrid> e devolve um array de
-// porcentagens (string). Se o grid nao tiver larguras validas, devolve
-// larguras iguais como fallback.
-//
-// POR QUE (Bug 7): formularios densos tem colunas de larguras MUITO
-// diferentes (um rotulo estreito ao lado de um campo largo). Distribuir
-// larguras IGUAIS espreme as celulas de rotulo para ~metade do tamanho que o
-// Word deu, e o TCPDF, sem largura suficiente, quebra a palavra no meio
-// ("Bair|ro:", "CE|P:", "Tele|fone:"). Preservar a largura real de cada
-// coluna faz a tabela sair com as mesmas proporcoes do Word e as palavras
-// param de quebrar.
-function gridColWidths(tblGrid, numCols) {
-  var widths = [];
-  var raw = [];
-  var totalW = 0;
-  if (tblGrid) {
-    for (var i = 0; i < tblGrid.children.length; i++) {
-      if (getLN(tblGrid.children[i]) !== 'gridCol') continue;
-      var w = parseInt(getWAttr(tblGrid.children[i], 'w') || '0', 10);
-      if (isNaN(w) || w < 0) w = 0;
-      raw.push(w);
-      totalW += w;
-    }
-  }
-  // Fallback: sem larguras validas (ou contagem diferente) -> divide igual
-  if (raw.length !== numCols || totalW <= 0) {
-    var eq = (100 / (numCols || 1)).toFixed(4);
-    for (var j = 0; j < numCols; j++) widths.push(eq);
-    return widths;
-  }
-  for (var k = 0; k < raw.length; k++) {
-    widths.push((raw[k] * 100 / totalW).toFixed(4));
-  }
-  return widths;
-}
-
 // ════════════════════════════════════════
 // TABELA CK4
 // ════════════════════════════════════════
 function tableToHTMLCK4(tblEl) {
   var tblGrid  = getChild(tblEl, 'tblGrid');
   var numCols  = tblGrid ? tblGrid.children.length : 0;
-  var html = '<table border="1" cellpadding="1" cellspacing="1" style="width:100%;">\n';
-  if (numCols > 0) {
-    var widths = gridColWidths(tblGrid, numCols);
-    html += '\t<colgroup>';
-    for (var w = 0; w < numCols; w++) html += '<col style="width:' + widths[w] + '%;">';
-    html += '</colgroup>\n';
-  }
-  html += '\t<tbody>\n';
+  var html = '<table border="1" cellpadding="1" cellspacing="1" style="width:100%;">\n\t<tbody>\n';
 
   for (var i = 0; i < tblEl.children.length; i++) {
     var row = tblEl.children[i];
@@ -535,9 +426,9 @@ function docToHTMLCK4(bodyEl) {
 function tableToHTMLCK5(tblEl) {
   var tblGrid = getChild(tblEl, 'tblGrid');
   var numCols = tblGrid ? tblGrid.children.length : 1;
-  var widths  = gridColWidths(tblGrid, numCols);
+  var colW    = numCols > 0 ? (100 / numCols).toFixed(4) : 100;
   var colgroup = '<colgroup>';
-  for (var i = 0; i < numCols; i++) colgroup += '<col style="width:' + widths[i] + '%;">';
+  for (var i = 0; i < numCols; i++) colgroup += '<col style="width:' + colW + '%;">';
   colgroup += '</colgroup>';
 
   var html = '<figure class="table" style="width:100%;">\n';
@@ -621,20 +512,11 @@ function showResult(html) {
   document.getElementById('htmlCode').value   = html;
   document.getElementById('cc').textContent   = html.length.toLocaleString('pt-BR') + ' chars';
   document.getElementById('btnCopy').disabled = false;
+  document.getElementById('btnCopyTop').disabled = false;
   document.querySelector('[data-tab="Prev"]').click();
 }
 
 function addHistory(name, size, html, mode) {
-  // Evita duplicar o mesmo arquivo no historico. Se ja existe uma conversao
-  // do mesmo arquivo (mesmo nome e tamanho), remove a antiga antes de inserir
-  // a nova no topo. Assim, trocar de versao (CK5 <-> CK4) ou reconverter o
-  // mesmo arquivo apenas ATUALIZA o registro existente, em vez de empilhar
-  // varias entradas iguais e estourar o limite de 10 registros.
-  for (var i = fileHistory.length - 1; i >= 0; i--) {
-    if (fileHistory[i].name === name && fileHistory[i].size === size) {
-      fileHistory.splice(i, 1);
-    }
-  }
   fileHistory.unshift({ name:name, size:size, html:html, mode:mode, date:new Date() });
   if (fileHistory.length > 10) fileHistory.pop();
   renderHistory();
@@ -646,7 +528,7 @@ function renderHistory() {
   if (!fileHistory.length) { empty.style.display = 'block'; list.innerHTML = ''; return; }
   empty.style.display = 'none';
   list.innerHTML = fileHistory.map(function(h, i) {
-    return '<div class="hist-item" data-index="' + i + '">' +
+    return '<div class="hist-item" onclick="loadHist(' + i + ')">' +
       '<div class="hi-name">' + escHTML(h.name) +
       '<span class="hi-badge badge-' + h.mode + '">' + h.mode.toUpperCase() + '</span></div>' +
       '<div class="hi-meta">' + fmt(h.size) + ' \u00b7 ' + h.html.length.toLocaleString('pt-BR') + ' chars \u00b7 ' + h.date.toLocaleTimeString('pt-BR') + '</div></div>';
@@ -678,9 +560,10 @@ async function handleFile(file) {
   } catch(e) { setStatus('err', 'Erro: ' + e.message); console.error(e); }
 }
 
-function copyHTML() {
+function copyHTML(btnEl) {
   if (!currentHTML) return;
-  var b = document.getElementById('btnCopy'), o = b.textContent;
+  var b = (btnEl && btnEl.nodeType === 1) ? btnEl : document.getElementById('btnCopy');
+  var o = b.textContent;
 
   function onSuccess() {
     b.textContent = 'Copiado!'; b.classList.add('cok');
@@ -723,6 +606,7 @@ function clearAll() {
   document.getElementById('htmlCode').value   = '';
   document.getElementById('cc').textContent   = '';
   document.getElementById('btnCopy').disabled = true;
+  document.getElementById('btnCopyTop').disabled = true;
   document.getElementById('fi').value         = '';
   document.getElementById('finfo').style.display = 'none';
   setStatus('', 'Pronto \u2014 arraste um .docx');
@@ -733,15 +617,11 @@ function clearAll() {
 // ════════════════════════════════════════
 document.getElementById('btnCK5').addEventListener('click', function() { setMode('ck5'); });
 document.getElementById('btnCK4').addEventListener('click', function() { setMode('ck4'); });
-document.getElementById('btnCopy').addEventListener('click', copyHTML);
+document.getElementById('btnCopy').addEventListener('click', function() { copyHTML(document.getElementById('btnCopy')); });
+document.getElementById('btnCopyTop').addEventListener('click', function() { copyHTML(document.getElementById('btnCopyTop')); });
 document.getElementById('btnClear').addEventListener('click', clearAll);
 document.getElementById('btnSelectFile').addEventListener('click', function() { document.getElementById('fi').click(); });
 document.getElementById('fi').addEventListener('change', function(e) { if (e.target.files[0]) handleFile(e.target.files[0]); });
-
-document.getElementById('histList').addEventListener('click', function(e) {
-  var item = e.target.closest('.hist-item');
-  if (item) loadHist(parseInt(item.getAttribute('data-index'), 10));
-});
 
 document.querySelectorAll('.tab').forEach(function(t) {
   t.addEventListener('click', function() {
