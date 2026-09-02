@@ -22,7 +22,10 @@ header{border-bottom:1px solid var(--border);padding:12px 20px;display:flex;alig
 .hlink{font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--muted);text-decoration:none;display:inline-flex;align-items:center;gap:5px;padding:5px 11px;border-radius:7px;border:1px solid var(--border);background:transparent;transition:all .2s;white-space:nowrap}
 .hlink:hover{color:var(--accent2);border-color:var(--accent)}
 .hlink[hidden]{display:none}
-.version-switcher{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;gap:8px;align-items:center;white-space:nowrap}
+.version-switcher{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:5px;white-space:nowrap}
+.vs-row{display:flex;align-items:center;gap:8px}
+.ver-help-link{font-size:11px;color:var(--accent2);text-decoration:none;font-family:'IBM Plex Sans',sans-serif}
+.ver-help-link:hover{text-decoration:underline}
 .ver-pick{padding:13px 14px;border-bottom:1px solid var(--border);background:var(--surface2);flex-shrink:0}
 .ver-pick-label{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:500;margin-bottom:8px}
 .ver-pick .vs-btn{flex:1;padding:9px 0;border-radius:8px;font-size:12px}
@@ -127,14 +130,16 @@ main{flex:1;display:grid;grid-template-columns:290px 1fr;overflow:hidden;height:
          2. Remova a palavra  hidden  da tag <a>
        ============================================================ -->
   <div class="version-switcher">
-    <span class="vs-label">Selecione a vers&atilde;o do Modelo de contrato:</span>
-    <button class="vs-btn active" id="btnCK5">Vers&atilde;o 5</button>
-    <span class="vc-sep">|</span>
-    <button class="vs-btn ck4"    id="btnCK4">Vers&atilde;o 4</button>
+    <div class="vs-row">
+      <span class="vs-label">Selecione a vers&atilde;o do Modelo de contrato:</span>
+      <button class="vs-btn active" id="btnCK5">Vers&atilde;o 5</button>
+      <span class="vc-sep">|</span>
+      <button class="vs-btn ck4"    id="btnCK4">Vers&atilde;o 4</button>
+    </div>
+    <a class="ver-help-link" id="linkVersao" href="COLOQUE_AQUI_O_LINK_DA_DRIVE_DE_IMAGENS" target="_blank" rel="noopener noreferrer">N&atilde;o sabe qual a sua vers&atilde;o? Clique aqui!</a>
   </div>
   <div class="header-links">
     <a class="hlink" id="linkVideo" href="" target="_blank" rel="noopener" hidden>&#9654; Tutorial em v&iacute;deo</a>
-    <a class="hlink" id="linkVersao" href="" target="_blank" rel="noopener" hidden>&#10067; Qual &eacute; a minha vers&atilde;o?</a>
   </div>
 </header>
 
