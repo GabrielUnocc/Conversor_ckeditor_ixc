@@ -266,12 +266,124 @@ function getChild(el, tag) {
 function getWAttr(el, name) {
   return el.getAttributeNS(W, name) || el.getAttribute('w:' + name) || el.getAttribute(name);
 }
+function repeatStr(s, n) { var r = ''; for (var i = 0; i < n; i++) r += s; return r; }
+function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+function escText(t) { return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
+// Devolve, em ordem, os filhos de "el" cujo localName esta em "wanted".
+function flatChildren(el, wanted) {
+  var out = [];
+  for (var i = 0; i < el.children.length; i++) {
+    var c = el.children[i], ln = getLN(c);
+    if (wanted[ln]) out.push(c);
+  }
+  return out;
+}
+
+// Coleta os <w:r> de um paragrafo (inclusive dentro de hyperlink).
+function collectRuns(el, out) {
+  for (var i = 0; i < el.children.length; i++) {
+    var c = el.children[i], ln = getLN(c);
+    if (ln === 'r') out.push(c);
+    else if (ln === 'hyperlink') collectRuns(c, out);
+  }
+  return out;
+}
+
+// ════════════════════════════════════════
+// CONTEXTO DO DOCUMENTO: ESTILOS
+// ════════════════════════════════════════
+// POR QUE (issue #7): em muitos .docx o negrito e o alinhamento dos titulos
+// NAO estao no paragrafo, e sim no ESTILO (ex: "Titulo 1" e negrito e
+// centralizado em word/styles.xml). Sem ler os estilos, os titulos saiam como
+// texto comum.
+var CTX = null;
+
+// Le <w:b>/<w:i>: null = nao definido aqui; true/false = ligado/desligado.
+// <w:b w:val="0"/> DESLIGA o negrito (antes era tratado como negrito).
+function onOff(el) {
+  if (!el) return null;
+  var v = (getWAttr(el, 'val') || '').toLowerCase();
+  return !(v === '0' || v === 'false' || v === 'off');
+}
+function readRunFmt(rPr) {
+  var f = { b: null, i: null, u: null, hidden: null };
+  if (!rPr) return f;
+  f.b = onOff(getChild(rPr, 'b'));
+  f.i = onOff(getChild(rPr, 'i'));
+  f.hidden = onOff(getChild(rPr, 'vanish'));
+  var u = getChild(rPr, 'u');
+  if (u) f.u = (getWAttr(u, 'val') || 'single') !== 'none';
+  return f;
+}
+// Aplica "over" por cima de "base" (so o que estiver definido em "over").
+function applyFmt(base, over) {
+  return {
+    b: over.b !== null ? over.b : base.b,
+    i: over.i !== null ? over.i : base.i,
+    u: over.u !== null ? over.u : base.u,
+    hidden: over.hidden !== null ? over.hidden : base.hidden
+  };
+}
+function parseStyles(xmlStr) {
+  var res = { raw: {}, resolved: {}, defFmt: { b:false, i:false, u:false, hidden:false }, defaultPara: null };
+  if (!xmlStr) return res;
+  var root = parseXML(xmlStr).documentElement;
+  for (var i = 0; i < root.children.length; i++) {
+    var c = root.children[i], ln = getLN(c);
+    if (ln === 'docDefaults') {
+      var rd = getChild(c, 'rPrDefault');
+      var rp = rd ? getChild(rd, 'rPr') : null;
+      if (rp) res.defFmt = applyFmt(res.defFmt, readRunFmt(rp));
+    } else if (ln === 'style') {
+      var id  = getWAttr(c, 'styleId');
+      if (!id) continue;
+      var bo  = getChild(c, 'basedOn');
+      var pPr = getChild(c, 'pPr');
+      var jc  = pPr ? getChild(pPr, 'jc') : null;
+      res.raw[id] = {
+        basedOn: bo ? getWAttr(bo, 'val') : null,
+        fmt:     readRunFmt(getChild(c, 'rPr')),
+        jc:      jc ? (getWAttr(jc, 'val') || null) : null
+      };
+      var isDef = getWAttr(c, 'default');
+      if (getWAttr(c, 'type') === 'paragraph' && (isDef === '1' || isDef === 'true')) res.defaultPara = id;
+    }
+  }
+  return res;
+}
+
+// Resolve a cadeia basedOn de um estilo e devolve { fmt, jc } efetivos.
+function resolveStyle(id, depth) {
+  var S = CTX.styles;
+  var empty = { fmt: S.defFmt, jc: null };
+  if (!id || !S.raw[id] || (depth || 0) > 20) return empty;
+  if (S.resolved[id]) return S.resolved[id];
+  var st   = S.raw[id];
+  var base = st.basedOn ? resolveStyle(st.basedOn, (depth || 0) + 1) : empty;
+  var r = { fmt: applyFmt(base.fmt, st.fmt), jc: st.jc || base.jc };
+  S.resolved[id] = r;
+  return r;
+}
+
+// ════════════════════════════════════════
+// RUNS E PARAGRAFOS
+// ════════════════════════════════════════
 // Extrai os dados de um <w:r>: texto (ja escapado) + formatacao (b/i/u).
 // NAO envolve em tags aqui de proposito -- quem envolve e paraToHTML, e
 // somente DEPOIS de juntar runs vizinhos de mesma formatacao (ver Bug 6
 // no comentario de paraToHTML). Retorna null se o run nao tem texto.
-function parseRun(rEl) {
+//   baseFmt = formatacao herdada do estilo do paragrafo
+function parseRun(rEl, baseFmt) {
+  var rPr = getChild(rEl, 'rPr');
+  var fmt = baseFmt;
+  if (rPr) {
+    var rs = getChild(rPr, 'rStyle');
+    if (rs) fmt = applyFmt(fmt, resolveStyle(getWAttr(rs, 'val')).fmt);
+    fmt = applyFmt(fmt, readRunFmt(rPr));
+  }
+  if (fmt.hidden) return null;   // texto oculto (w:vanish) nao aparece no Word
+
   var raw = '';
   for (var i = 0; i < rEl.children.length; i++) {
     var c = rEl.children[i], ln = getLN(c);
@@ -286,53 +398,40 @@ function parseRun(rEl) {
       if (t.length > 1 && t.replace(/ /g, '').length === 0) {
         t = t.replace(/ /g, '\u00a0');
       }
-      t = t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      raw += t;
+      raw += escText(t);
     }
-    if (ln === 'br') raw += '<br>';
+    else if (ln === 'br') raw += '<br>';
   }
   if (raw === '') return null;
-  var rPr = getChild(rEl, 'rPr');
-  var bold = false, italic = false, underOn = false;
-  if (rPr) {
-    bold   = !!(getChild(rPr, 'b') || getChild(rPr, 'bCs'));
-    italic = !!(getChild(rPr, 'i') || getChild(rPr, 'iCs'));
-    var under = getChild(rPr, 'u');
-    var uVal  = under ? (getWAttr(under, 'val') || '') : '';
-    underOn = !!(under && uVal !== 'none');
-  }
-  return { text: raw, b: bold, i: italic, u: underOn };
+  return { text: raw, b: !!fmt.b, i: !!fmt.i, u: !!fmt.u };
+}
+
+function mapJc(v) {
+  if (v === 'center') return 'center';
+  if (v === 'right' || v === 'end') return 'right';
+  if (v === 'both' || v === 'distribute') return 'justify';
+  return '';
 }
 
 function paraToHTML(pEl) {
-  // Le alinhamento do paragrafo (pPr > jc)
-  var align = '';
   var pPr = getChild(pEl, 'pPr');
-  if (pPr) {
-    var jc = getChild(pPr, 'jc');
-    if (jc) {
-      var jcVal = getWAttr(jc, 'val') || '';
-      if (jcVal === 'center') align = 'center';
-      else if (jcVal === 'right') align = 'right';
-      else if (jcVal === 'both') align = 'justify';
-    }
-  }
 
-  // 1) Coleta os runs do paragrafo (inclusive dentro de hyperlink) como "pecas".
+  // Estilo do paragrafo (ou o estilo padrao "Normal" do documento)
+  var psEl    = pPr ? getChild(pPr, 'pStyle') : null;
+  var styleId = psEl ? getWAttr(psEl, 'val') : CTX.styles.defaultPara;
+  var st      = resolveStyle(styleId);
+
+  // Alinhamento: direto no paragrafo (pPr > jc) ou herdado do estilo
+  var jc    = pPr ? getChild(pPr, 'jc') : null;
+  var align = mapJc(jc ? getWAttr(jc, 'val') : st.jc);
+
+  // 1) Coleta os runs do paragrafo como "pecas".
   var pieces = [];
-  for (var i = 0; i < pEl.children.length; i++) {
-    var c = pEl.children[i], ln = getLN(c);
-    if (ln === 'r') {
-      var pr = parseRun(c);
-      if (pr) pieces.push(pr);
-    } else if (ln === 'hyperlink') {
-      for (var j = 0; j < c.children.length; j++) {
-        if (getLN(c.children[j]) === 'r') {
-          var ph = parseRun(c.children[j]);
-          if (ph) pieces.push(ph);
-        }
-      }
-    }
+
+  var runs = collectRuns(pEl, []);
+  for (var i = 0; i < runs.length; i++) {
+    var pr = parseRun(runs[i], st.fmt);
+    if (pr) pieces.push(pr);
   }
 
   // 2) Junta pecas VIZINHAS de mesma formatacao em uma so.
@@ -383,15 +482,6 @@ function paraToHTML(pEl) {
 
   // Retorna objeto com texto e alinhamento para uso em docToHTML
   return { text: html, align: align };
-}
-
-// Devolve, em ordem, os filhos de "el" cujo localName esta em "wanted".
-function flatChildren(el, wanted) {
-  var out = [];
-  for (var i = 0; i < el.children.length; i++) {
-    if (wanted[getLN(el.children[i])]) out.push(el.children[i]);
-  }
-  return out;
 }
 
 // ════════════════════════════════════════
@@ -582,6 +672,9 @@ async function processDocx(arrayBuffer, mode) {
   var zip    = await JSZip.loadAsync(arrayBuffer);
   var xmlStr = await readZipText(zip, 'word/document.xml');
   if (!xmlStr) throw new Error('Documento invalido (sem word/document.xml).');
+  CTX = {
+    styles:    parseStyles(await readZipText(zip, 'word/styles.xml'))
+  };
   var doc  = parseXML(xmlStr);
   var body = null;
   var all  = doc.getElementsByTagName('*');
