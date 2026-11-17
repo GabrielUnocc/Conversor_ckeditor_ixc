@@ -71,6 +71,10 @@ Acesse direto no navegador, sem instalar nada:
 - **Sem palavras cortadas no meio** — os espaços entre palavras são mantidos quebráveis, para o TCPDF poder quebrar a linha no lugar certo (e não no meio de "características").
 - **Alinhamento** — centralizado, à direita e justificado, lidos do `w:jc` e aplicados via `text-align`.
 - **Formatação inline** — negrito (`<strong>`), itálico (`<em>`) e sublinhado (`<u>`) preservados.
+- **Títulos e estilos do Word** — negrito, sublinhado e alinhamento que vêm do **estilo** (ex: "Título 1", "Título 2") são lidos do `styles.xml`, então títulos não saem mais como texto comum.
+- **Listas numeradas e marcadores** — "1.", "a)", "I -", "CLÁUSULA 1ª:" e "•" são gerados a partir do `numbering.xml`, com a contagem correta.
+- **Campos para preencher e linhas de assinatura** — tabulações sublinhadas (`Assinatura: ______`, `__/__/____`) e linhas desenhadas viram sublinhados (`_`) que aparecem no PDF.
+- **Conteúdo em controles e alterações controladas** — texto dentro de controles de conteúdo, inserções controladas e tabelas dentro de células não é mais descartado.
 - **Histórico de sessão** — as últimas conversões ficam disponíveis enquanto a aba estiver aberta; reconverter o mesmo arquivo (ou trocar de versão) atualiza o registro em vez de duplicar.
 - **Cópia inteligente** — detecta HTTPS ou HTTP e usa o método de cópia compatível.
 
@@ -130,17 +134,22 @@ As larguras vêm das colunas reais do documento (proporcionais), não fixas em p
 
 ## Como funciona internamente
 
-Um arquivo `.docx` é um ZIP contendo XMLs no formato **OOXML** (padrão Microsoft). A ferramenta usa o **JSZip** para abrir esse ZIP no navegador e lê o `word/document.xml` com o **DOMParser** nativo.
+Um arquivo `.docx` é um ZIP contendo XMLs no formato **OOXML** (padrão Microsoft). A ferramenta usa o **JSZip** para abrir esse ZIP no navegador e lê o `word/document.xml` (conteúdo), o `word/styles.xml` (estilos/títulos) e o `word/numbering.xml` (listas) com o **DOMParser** nativo.
 
 ```
 .docx (ZIP)
 └── word/
+    ├── styles.xml    ← negrito/alinhamento herdados de estilos (títulos)
+    ├── numbering.xml ← formato das listas ("1.", "a)", "•")
     └── document.xml  ← lido pelo DOMParser
          ├── <w:p>       → <p style="text-align:...">
+         ├── <w:numPr>   → rótulo da lista no início do parágrafo
          ├── <w:tbl>     → <figure class="table"> (CK5) ou <table border="1"> (CK4)
          ├── <w:tblGrid> → <colgroup> com as larguras reais de cada coluna
          ├── <w:tc>      → <td colspan="N">  (colspan via w:gridSpan)
          ├── <w:r>       → <strong>/<em>/<u>  (runs de mesma formatação são unidos)
+         ├── <w:tab>     → "____" se sublinhada (campo para preencher)
+         ├── linhas      → "____" (linhas de assinatura desenhadas)
          └── <w:jc>      → text-align: center | right | justify
 ```
 
@@ -198,8 +207,10 @@ README.md            # este arquivo
 | Limitação | Situação |
 |---|---|
 | Imagens dentro do `.docx` | Não convertidas |
-| Listas numeradas / marcadores | Convertidas como parágrafos simples |
-| Tamanho e família de fonte | Não preservados |
+| Listas numeradas / marcadores | Convertidas como parágrafos com o número/marcador em texto (não `<ol>/<ul>`) |
+| Tamanho e família de fonte | Não preservados (títulos saem em negrito e alinhados, no tamanho padrão) |
+| Tabela dentro de célula | Conteúdo vira linhas de texto dentro da célula (o TCPDF não imprime tabela aninhada) |
+| Caixas de texto, cabeçalho e rodapé | Não convertidos |
 | Cor de texto e recuo de parágrafo | Não preservados |
 | Mesclagem vertical (rowspan) | Detectada e ignorada |
 | Arquivos `.doc` (formato legado) | Não suportados — salve como `.docx` no Word antes |

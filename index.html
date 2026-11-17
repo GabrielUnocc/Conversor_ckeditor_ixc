@@ -203,6 +203,7 @@ var currentMode = 'ck5';
 var currentHTML = '';
 var lastFile    = null;
 var fileHistory = [];
+var convSeq     = 0;   // id da conversao mais recente (descarta resultados velhos)
 
 var MODES = {
   ck5: {
@@ -224,7 +225,8 @@ var MODES = {
 // ════════════════════════════════════════
 // TROCA DE MODO
 // ════════════════════════════════════════
-function setMode(mode) {
+// noReconvert = true quando quem chama ja tem o HTML pronto (ex: historico)
+function setMode(mode, noReconvert) {
   currentMode = mode;
   var m = MODES[mode];
   var s = document.documentElement.style;
@@ -240,7 +242,7 @@ function setMode(mode) {
   document.getElementById('htmlCode').style.color    = m.codeColor;
   document.getElementById('headerLogo').style.background =
     'linear-gradient(135deg,' + m.accent + ',' + m.accent2 + ')';
-  if (lastFile) handleFile(lastFile);
+  if (lastFile && !noReconvert) handleFile(lastFile);
 }
 
 // ════════════════════════════════════════
@@ -264,17 +266,328 @@ function getChild(el, tag) {
 function getWAttr(el, name) {
   return el.getAttributeNS(W, name) || el.getAttribute('w:' + name) || el.getAttribute(name);
 }
+function repeatStr(s, n) { var r = ''; for (var i = 0; i < n; i++) r += s; return r; }
+function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+function escText(t) { return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
+// Elementos "envelope" do Word que nao sao conteudo, mas EMBRULHAM conteudo:
+// controles de conteudo (sdt), alteracoes controladas (ins/moveTo), XML
+// personalizado, smart tags, campos simples, hyperlinks. Antes eles eram
+// ignorados e o texto de dentro SUMIA do resultado. w:del / w:moveFrom
+// (texto excluido com controle de alteracoes) ficam de fora de proposito.
+var RUN_WRAPPERS   = { hyperlink:1, sdt:1, sdtContent:1, ins:1, moveTo:1, smartTag:1, customXml:1, fldSimple:1, dir:1, bdo:1 };
+var BLOCK_WRAPPERS = { sdt:1, sdtContent:1, customXml:1, ins:1, moveTo:1 };
+
+// Devolve, em ordem, os filhos de "el" cujo localName esta em "wanted",
+// atravessando os envelopes de bloco (ex: body -> sdt -> sdtContent -> p).
+function flatChildren(el, wanted) {
+  var out = [];
+  for (var i = 0; i < el.children.length; i++) {
+    var c = el.children[i], ln = getLN(c);
+    if (wanted[ln]) out.push(c);
+    else if (BLOCK_WRAPPERS[ln]) out = out.concat(flatChildren(c, wanted));
+  }
+  return out;
+}
+
+// Coleta os <w:r> de um paragrafo, atravessando hyperlink, sdt, ins etc.
+function collectRuns(el, out) {
+  for (var i = 0; i < el.children.length; i++) {
+    var c = el.children[i], ln = getLN(c);
+    if (ln === 'r') out.push(c);
+    else if (RUN_WRAPPERS[ln]) collectRuns(c, out);
+  }
+  return out;
+}
+
+// ════════════════════════════════════════
+// CONTEXTO DO DOCUMENTO: ESTILOS E NUMERACAO
+// ════════════════════════════════════════
+// POR QUE (issue #7): em muitos .docx o negrito e o alinhamento dos titulos
+// NAO estao no paragrafo, e sim no ESTILO (ex: "Titulo 1" e negrito e
+// centralizado em word/styles.xml). Sem ler os estilos, os titulos saiam como
+// texto comum. O mesmo vale para a numeracao de listas ("1.", "2.", "\u2022"),
+// que fica em word/numbering.xml.
+var CTX = null;
+
+// Le <w:b>/<w:i>: null = nao definido aqui; true/false = ligado/desligado.
+// <w:b w:val="0"/> DESLIGA o negrito (antes era tratado como negrito).
+function onOff(el) {
+  if (!el) return null;
+  var v = (getWAttr(el, 'val') || '').toLowerCase();
+  return !(v === '0' || v === 'false' || v === 'off');
+}
+function readRunFmt(rPr) {
+  var f = { b: null, i: null, u: null, hidden: null };
+  if (!rPr) return f;
+  f.b = onOff(getChild(rPr, 'b'));
+  f.i = onOff(getChild(rPr, 'i'));
+  f.hidden = onOff(getChild(rPr, 'vanish'));
+  var u = getChild(rPr, 'u');
+  if (u) f.u = (getWAttr(u, 'val') || 'single') !== 'none';
+  return f;
+}
+// Aplica "over" por cima de "base" (so o que estiver definido em "over").
+function applyFmt(base, over) {
+  return {
+    b: over.b !== null ? over.b : base.b,
+    i: over.i !== null ? over.i : base.i,
+    u: over.u !== null ? over.u : base.u,
+    hidden: over.hidden !== null ? over.hidden : base.hidden
+  };
+}
+function readNumPr(pPr) {
+  var np = pPr ? getChild(pPr, 'numPr') : null;
+  if (!np) return null;
+  var idEl = getChild(np, 'numId'), lvEl = getChild(np, 'ilvl');
+  return {
+    numId: idEl ? (getWAttr(idEl, 'val') || null) : null,
+    ilvl:  lvEl ? (getWAttr(lvEl, 'val') || null) : null
+  };
+}
+
+function parseStyles(xmlStr) {
+  var res = { raw: {}, resolved: {}, defFmt: { b:false, i:false, u:false, hidden:false }, defaultPara: null };
+  if (!xmlStr) return res;
+  var root = parseXML(xmlStr).documentElement;
+  for (var i = 0; i < root.children.length; i++) {
+    var c = root.children[i], ln = getLN(c);
+    if (ln === 'docDefaults') {
+      var rd = getChild(c, 'rPrDefault');
+      var rp = rd ? getChild(rd, 'rPr') : null;
+      if (rp) res.defFmt = applyFmt(res.defFmt, readRunFmt(rp));
+    } else if (ln === 'style') {
+      var id  = getWAttr(c, 'styleId');
+      if (!id) continue;
+      var bo  = getChild(c, 'basedOn');
+      var pPr = getChild(c, 'pPr');
+      var jc  = pPr ? getChild(pPr, 'jc') : null;
+      res.raw[id] = {
+        basedOn: bo ? getWAttr(bo, 'val') : null,
+        fmt:     readRunFmt(getChild(c, 'rPr')),
+        jc:      jc ? (getWAttr(jc, 'val') || null) : null,
+        numPr:   readNumPr(pPr)
+      };
+      var isDef = getWAttr(c, 'default');
+      if (getWAttr(c, 'type') === 'paragraph' && (isDef === '1' || isDef === 'true')) res.defaultPara = id;
+    }
+  }
+  return res;
+}
+
+// Resolve a cadeia basedOn de um estilo e devolve { fmt, jc, numPr } efetivos.
+function resolveStyle(id, depth) {
+  var S = CTX.styles;
+  var empty = { fmt: S.defFmt, jc: null, numPr: null };
+  if (!id || !S.raw[id] || (depth || 0) > 20) return empty;
+  if (S.resolved[id]) return S.resolved[id];
+  var st   = S.raw[id];
+  var base = st.basedOn ? resolveStyle(st.basedOn, (depth || 0) + 1) : empty;
+  var np   = base.numPr;
+  if (st.numPr) np = { numId: st.numPr.numId || (np && np.numId), ilvl: st.numPr.ilvl || (np && np.ilvl) };
+  var r = { fmt: applyFmt(base.fmt, st.fmt), jc: st.jc || base.jc, numPr: np };
+  S.resolved[id] = r;
+  return r;
+}
+
+function parseNumbering(xmlStr) {
+  var res = { abstracts: {}, nums: {} };
+  if (!xmlStr) return res;
+  var root = parseXML(xmlStr).documentElement;
+  function readLevels(parent, into) {
+    for (var k = 0; k < parent.children.length; k++) {
+      var lv = parent.children[k];
+      if (getLN(lv) !== 'lvl') continue;
+      var st = getChild(lv, 'start'), nf = getChild(lv, 'numFmt'), lt = getChild(lv, 'lvlText');
+      into[getWAttr(lv, 'ilvl') || '0'] = {
+        start: st ? parseInt(getWAttr(st, 'val') || '1', 10) : 1,
+        fmt:   nf ? (getWAttr(nf, 'val') || 'decimal') : 'decimal',
+        text:  lt ? (getWAttr(lt, 'val') || '') : ''
+      };
+    }
+  }
+  for (var i = 0; i < root.children.length; i++) {
+    var c = root.children[i], ln = getLN(c);
+    if (ln === 'abstractNum') {
+      var lv = {};
+      readLevels(c, lv);
+      res.abstracts[getWAttr(c, 'abstractNumId')] = lv;
+    } else if (ln === 'num') {
+      var an = getChild(c, 'abstractNumId');
+      var ov = {};
+      for (var j = 0; j < c.children.length; j++) {
+        var o = c.children[j];
+        if (getLN(o) !== 'lvlOverride') continue;
+        var so = getChild(o, 'startOverride');
+        var lvlO = getChild(o, 'lvl');
+        var key = getWAttr(o, 'ilvl') || '0';
+        ov[key] = {};
+        if (so) ov[key].start = parseInt(getWAttr(so, 'val') || '1', 10);
+        if (lvlO) { var tmp = {}; readLevels(o, tmp); if (tmp[key]) ov[key].lvl = tmp[key]; }
+      }
+      res.nums[getWAttr(c, 'numId')] = { abs: an ? getWAttr(an, 'val') : null, ov: ov };
+    }
+  }
+  return res;
+}
+
+function toRoman(n) {
+  var v = [1000,900,500,400,100,90,50,40,10,9,5,4,1];
+  var s = ['M','CM','D','CD','C','XC','L','XL','X','IX','V','IV','I'];
+  var r = '';
+  for (var i = 0; i < v.length; i++) while (n >= v[i]) { r += s[i]; n -= v[i]; }
+  return r;
+}
+function toLetter(n) {
+  if (n < 1) return '';
+  var r = '';
+  while (n > 0) { n--; r = String.fromCharCode(97 + (n % 26)) + r; n = Math.floor(n / 26); }
+  return r;
+}
+function fmtNumber(n, fmt) {
+  if (fmt === 'lowerLetter') return toLetter(n);
+  if (fmt === 'upperLetter') return toLetter(n).toUpperCase();
+  if (fmt === 'lowerRoman')  return toRoman(n).toLowerCase();
+  if (fmt === 'upperRoman')  return toRoman(n);
+  if (fmt === 'decimalZero') return (n < 10 ? '0' : '') + n;
+  return String(n);
+}
+// Marcadores do Word costumam usar caracteres das fontes Symbol/Wingdings
+// (area privada U+F0xx) que nao existem nas fontes do TCPDF -> vira "\u2022".
+function bulletChar(t) {
+  if (t === 'o' || t === '-' || t === '\u2013' || t === '\u2022') return t;
+  return '\u2022';
+}
+
+function getLevelDef(numId, ilvl) {
+  var num = CTX.numbering.nums[numId];
+  if (!num) return null;
+  var abs = CTX.numbering.abstracts[num.abs] || {};
+  var lv  = abs[ilvl];
+  var ov  = num.ov[ilvl];
+  if (ov && ov.lvl) lv = ov.lvl;
+  if (!lv) return null;
+  var start = (ov && ov.start !== undefined) ? ov.start : lv.start;
+  return { start: start, fmt: lv.fmt, text: lv.text };
+}
+
+// Devolve o rotulo do proximo item da lista ("1.", "a)", "\u2022"...) ou ''.
+function nextListLabel(numId, ilvl) {
+  if (!numId || numId === '0') return '';
+  ilvl = parseInt(ilvl || '0', 10);
+  var def = getLevelDef(numId, String(ilvl));
+  if (!def) return '';
+  var cnt = CTX.counters[numId] || (CTX.counters[numId] = {});
+  cnt[ilvl] = (cnt[ilvl] === undefined) ? def.start : cnt[ilvl] + 1;
+  for (var k in cnt) if (parseInt(k, 10) > ilvl) delete cnt[k];
+  if (def.fmt === 'none') return '';
+  if (def.fmt === 'bullet') return bulletChar(def.text);
+  return def.text.replace(/%(\d)/g, function(_, d) {
+    var L = parseInt(d, 10) - 1;
+    var ld = getLevelDef(numId, String(L)) || { start: 1, fmt: 'decimal' };
+    var v = cnt[L] !== undefined ? cnt[L] : ld.start;
+    return fmtNumber(v, ld.fmt);
+  });
+}
+
+// ════════════════════════════════════════
+// TABULACOES E LINHAS DESENHADAS
+// ════════════════════════════════════════
+// POR QUE (issue #7): campos para preencher ("Assinatura: ______",
+// "Declaro que recebi no dia __/__/____") sao feitos no Word com TABULACAO
+// SUBLINHADA, e as linhas de assinatura muitas vezes sao LINHAS DESENHADAS
+// (formas). Nenhum dos dois era convertido -- as linhas sumiam. Agora viram
+// sublinhados ("_") com comprimento proporcional ao do Word. Usamos "_" e nao
+// CSS/borda porque e o que imprime de forma confiavel no TCPDF.
+//
+// A posicao horizontal e ESTIMADA (~110 twips por caractere de texto), so para
+// saber ate qual parada de tabulacao o sublinhado deve ir.
+var TW_PER_CHAR = 110;   // largura media de um caractere em twips (11pt)
+var TW_PER_UNDER = 120;  // largura de um "_" em twips (11pt)
+
+function readTabStops(pPr) {
+  var stops = [];
+  var tabs = pPr ? getChild(pPr, 'tabs') : null;
+  if (!tabs) return stops;
+  for (var i = 0; i < tabs.children.length; i++) {
+    var t = tabs.children[i];
+    if (getLN(t) !== 'tab' || getWAttr(t, 'val') === 'clear') continue;
+    var pos = parseInt(getWAttr(t, 'pos') || '0', 10);
+    if (!isNaN(pos)) stops.push(pos);
+  }
+  return stops.sort(function(a, b) { return a - b; });
+}
+function nextTabStop(ps) {
+  for (var i = 0; i < ps.stops.length; i++) if (ps.stops[i] > ps.x + 20) return ps.stops[i];
+  return (Math.floor(ps.x / 720) + 1) * 720;   // parada padrao do Word: 0,5"
+}
+
+// Largura (twips) de uma linha horizontal desenhada em <w:drawing>, ou 0.
+function lineFromDrawing(dr) {
+  var holder = getChild(dr, 'inline') || getChild(dr, 'anchor');
+  if (!holder) return 0;
+  var ext = getChild(holder, 'extent');
+  if (!ext) return 0;
+  if (holder.getElementsByTagNameNS('*', 'pic').length) return 0;   // imagem, nao linha
+  var cx = parseInt(ext.getAttribute('cx') || '0', 10);
+  var cy = parseInt(ext.getAttribute('cy') || '0', 10);
+  if (cx > 0 && cy <= 30000 && cx >= cy * 20) return Math.round(cx / 635);  // EMU -> twips
+  return 0;
+}
+// Mesma coisa para o formato antigo VML (<w:pict>).
+function lineFromPict(pict) {
+  var all = pict.getElementsByTagName('*');
+  for (var i = 0; i < all.length; i++) {
+    var el = all[i], ln = getLN(el);
+    if (ln === 'imagedata') return 0;
+    if (ln !== 'line' && ln !== 'shape' && ln !== 'group' && ln !== 'rect') continue;
+    if (el.getAttribute('o:hr') === 't') return 9000;
+    var st = el.getAttribute('style') || '';
+    var w = st.match(/(?:^|;)\s*width:\s*([\d.]+)pt/);
+    var h = st.match(/(?:^|;)\s*height:\s*([\d.]+)pt/);
+    if (w && h && parseFloat(h[1]) <= 1.5) return Math.round(parseFloat(w[1]) * 20);
+  }
+  return 0;
+}
+function lineFromAny(el) {
+  var ln = getLN(el);
+  if (ln === 'drawing') return lineFromDrawing(el);
+  if (ln === 'pict')    return lineFromPict(el);
+  if (ln === 'AlternateContent') {
+    var ch = getChild(el, 'Choice'), fb = getChild(el, 'Fallback');
+    var w = 0;
+    if (ch) { var d = getChild(ch, 'drawing'); if (d) w = lineFromDrawing(d); }
+    if (!w && fb) { var p = getChild(fb, 'pict'); if (p) w = lineFromPict(p); }
+    return w;
+  }
+  return 0;
+}
+
+// ════════════════════════════════════════
+// RUNS E PARAGRAFOS
+// ════════════════════════════════════════
 // Extrai os dados de um <w:r>: texto (ja escapado) + formatacao (b/i/u).
 // NAO envolve em tags aqui de proposito -- quem envolve e paraToHTML, e
 // somente DEPOIS de juntar runs vizinhos de mesma formatacao (ver Bug 6
 // no comentario de paraToHTML). Retorna null se o run nao tem texto.
-function parseRun(rEl) {
+//   ps      = estado do paragrafo { stops, x } (para tabulacoes)
+//   baseFmt = formatacao herdada do estilo do paragrafo
+function parseRun(rEl, ps, baseFmt) {
+  var rPr = getChild(rEl, 'rPr');
+  var fmt = baseFmt;
+  if (rPr) {
+    var rs = getChild(rPr, 'rStyle');
+    if (rs) fmt = applyFmt(fmt, resolveStyle(getWAttr(rs, 'val')).fmt);
+    fmt = applyFmt(fmt, readRunFmt(rPr));
+  }
+  if (fmt.hidden) return null;   // texto oculto (w:vanish) nao aparece no Word
+
   var raw = '';
   for (var i = 0; i < rEl.children.length; i++) {
     var c = rEl.children[i], ln = getLN(c);
     if (ln === 't') {
       var t = c.textContent;
+      ps.x += t.length * TW_PER_CHAR;
       // Espaco UNICO entre palavras SEMPRE permanece espaco normal (quebravel).
       // Converter espaco unico para \u00a0 tira todos os pontos de quebra do
       // paragrafo e faz o TCPDF cortar palavras no meio ao imprimir o PDF
@@ -284,53 +597,74 @@ function parseRun(rEl) {
       if (t.length > 1 && t.replace(/ /g, '').length === 0) {
         t = t.replace(/ /g, '\u00a0');
       }
-      t = t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      raw += t;
+      raw += escText(t);
     }
-    if (ln === 'br') raw += '<br>';
+    else if (ln === 'br' || ln === 'cr') { raw += '<br>'; ps.x = 0; }
+    else if (ln === 'noBreakHyphen')     { raw += '-';    ps.x += TW_PER_CHAR; }
+    else if (ln === 'tab') {
+      var stop = nextTabStop(ps);
+      var gap  = Math.max(stop - ps.x, 240);
+      ps.x += gap;
+      // Tabulacao SUBLINHADA = campo para preencher -> "____".
+      // Tabulacao comum = espacamento -> alguns \u00a0.
+      if (fmt.u) raw += repeatStr('_', clamp(Math.round(gap / TW_PER_UNDER), 3, 80));
+      else       raw += repeatStr('\u00a0', clamp(Math.round(gap / TW_PER_CHAR), 1, 12));
+    }
+    else if (ln === 'drawing' || ln === 'pict' || ln === 'AlternateContent') {
+      var lw = lineFromAny(c);
+      if (lw > 0) {
+        raw += repeatStr('_', clamp(Math.round(lw / TW_PER_UNDER), 5, 80));
+        ps.x += lw;
+      }
+    }
   }
   if (raw === '') return null;
-  var rPr = getChild(rEl, 'rPr');
-  var bold = false, italic = false, underOn = false;
-  if (rPr) {
-    bold   = !!(getChild(rPr, 'b') || getChild(rPr, 'bCs'));
-    italic = !!(getChild(rPr, 'i') || getChild(rPr, 'iCs'));
-    var under = getChild(rPr, 'u');
-    var uVal  = under ? (getWAttr(under, 'val') || '') : '';
-    underOn = !!(under && uVal !== 'none');
-  }
-  return { text: raw, b: bold, i: italic, u: underOn };
+  return { text: raw, b: !!fmt.b, i: !!fmt.i, u: !!fmt.u };
+}
+
+function mapJc(v) {
+  if (v === 'center') return 'center';
+  if (v === 'right' || v === 'end') return 'right';
+  if (v === 'both' || v === 'distribute') return 'justify';
+  return '';
 }
 
 function paraToHTML(pEl) {
-  // Le alinhamento do paragrafo (pPr > jc)
-  var align = '';
   var pPr = getChild(pEl, 'pPr');
-  if (pPr) {
-    var jc = getChild(pPr, 'jc');
-    if (jc) {
-      var jcVal = getWAttr(jc, 'val') || '';
-      if (jcVal === 'center') align = 'center';
-      else if (jcVal === 'right') align = 'right';
-      else if (jcVal === 'both') align = 'justify';
+
+  // Estilo do paragrafo (ou o estilo padrao "Normal" do documento)
+  var psEl    = pPr ? getChild(pPr, 'pStyle') : null;
+  var styleId = psEl ? getWAttr(psEl, 'val') : CTX.styles.defaultPara;
+  var st      = resolveStyle(styleId);
+
+  // Alinhamento: direto no paragrafo (pPr > jc) ou herdado do estilo
+  var jc    = pPr ? getChild(pPr, 'jc') : null;
+  var align = mapJc(jc ? getWAttr(jc, 'val') : st.jc);
+
+  var ind = pPr ? getChild(pPr, 'ind') : null;
+  var ps  = { stops: readTabStops(pPr), x: ind ? (parseInt(getWAttr(ind, 'left') || getWAttr(ind, 'start') || '0', 10) || 0) : 0 };
+
+  // 1) Coleta os runs do paragrafo como "pecas".
+  var pieces = [];
+
+  // Numeracao/marcador da lista (direto no paragrafo ou herdado do estilo).
+  // A formatacao do rotulo segue a "marca de paragrafo" (pPr > rPr) + estilo.
+  var np = readNumPr(pPr) || st.numPr;
+  if (np) {
+    var numId = np.numId || (st.numPr && st.numPr.numId);
+    var ilvl  = np.ilvl  || (st.numPr && st.numPr.ilvl) || '0';
+    var label = nextListLabel(numId, ilvl);
+    if (label) {
+      var lf = applyFmt(st.fmt, readRunFmt(pPr ? getChild(pPr, 'rPr') : null));
+      pieces.push({ text: escText(label) + '\u00a0', b: !!lf.b, i: !!lf.i, u: false });
+      ps.x += 360;
     }
   }
 
-  // 1) Coleta os runs do paragrafo (inclusive dentro de hyperlink) como "pecas".
-  var pieces = [];
-  for (var i = 0; i < pEl.children.length; i++) {
-    var c = pEl.children[i], ln = getLN(c);
-    if (ln === 'r') {
-      var pr = parseRun(c);
-      if (pr) pieces.push(pr);
-    } else if (ln === 'hyperlink') {
-      for (var j = 0; j < c.children.length; j++) {
-        if (getLN(c.children[j]) === 'r') {
-          var ph = parseRun(c.children[j]);
-          if (ph) pieces.push(ph);
-        }
-      }
-    }
+  var runs = collectRuns(pEl, []);
+  for (var i = 0; i < runs.length; i++) {
+    var pr = parseRun(runs[i], ps, st.fmt);
+    if (pr) pieces.push(pr);
   }
 
   // 2) Junta pecas VIZINHAS de mesma formatacao em uma so.
@@ -383,23 +717,49 @@ function paraToHTML(pEl) {
   return { text: html, align: align };
 }
 
+// ════════════════════════════════════════
+// CELULAS E TABELAS (compartilhado)
+// ════════════════════════════════════════
 function cellToHTML(tcEl) {
-  var paras = [];
-  for (var i = 0; i < tcEl.children.length; i++) {
-    if (getLN(tcEl.children[i]) === 'p') {
-      var r = paraToHTML(tcEl.children[i]);
+  var lines = [];
+  var kids = flatChildren(tcEl, { p:1, tbl:1 });
+  for (var i = 0; i < kids.length; i++) {
+    if (getLN(kids[i]) === 'p') {
+      var r = paraToHTML(kids[i]);
       var style = r.align ? ' style="text-align:' + r.align + ';"' : '';
-      if (r.text.trim()) paras.push('<span' + style + '>' + r.text + '</span>');
+      if (r.text.trim()) lines.push('<span' + style + '>' + r.text + '</span>');
+    } else {
+      nestedTableLines(kids[i], lines);
     }
   }
-  return paras.length ? paras.join('<br>') : '&nbsp;';
+  return lines.length ? lines.join('<br>') : '&nbsp;';
+}
+
+// Tabela DENTRO de celula: o TCPDF nao renderiza bem tabela aninhada (era a
+// causa original do texto "letra por letra"), entao o conteudo dela vira
+// linhas de texto dentro da celula, uma por linha da tabela, com as celulas
+// separadas por "|". Antes esse conteudo era simplesmente descartado.
+function nestedTableLines(tblEl, lines) {
+  var rows = flatChildren(tblEl, { tr:1 });
+  for (var i = 0; i < rows.length; i++) {
+    var cells = flatChildren(rows[i], { tc:1 });
+    var parts = [];
+    for (var j = 0; j < cells.length; j++) {
+      if (isSkipRow(cells[j])) continue;
+      var h = cellToHTML(cells[j]);
+      if (h !== '&nbsp;') parts.push(h);
+    }
+    // &nbsp; e nao espaco comum: espaco solto entre tags o TCPDF descarta (Bug 6)
+    if (parts.length) lines.push(parts.join('&nbsp;|&nbsp;'));
+  }
 }
 
 function getColspan(tc) {
   var tcPr = getChild(tc, 'tcPr');
   if (!tcPr) return 1;
   var gs = getChild(tcPr, 'gridSpan');
-  return gs ? parseInt(getWAttr(gs, 'val') || '1', 10) : 1;
+  var n = gs ? parseInt(getWAttr(gs, 'val') || '1', 10) : 1;
+  return n > 0 ? n : 1;
 }
 
 function isSkipRow(tc) {
@@ -409,32 +769,13 @@ function isSkipRow(tc) {
   return vm !== null && (getWAttr(vm, 'val') || '') !== 'restart';
 }
 
-// Conta quantas colunas a linha de fato preenche (soma de colspans),
-// ignorando celulas de vMerge continue (que nao aparecem na linha renderizada)
-function rowFilledCols(row) {
-  var sum = 0;
-  for (var i = 0; i < row.children.length; i++) {
-    var tc = row.children[i];
-    if (getLN(tc) !== 'tc' || isSkipRow(tc)) continue;
-    sum += getColspan(tc);
-  }
-  return sum;
-}
-
-// O Word permite que uma linha preencha menos colunas que o total da grade
-// (ex: um titulo com colspan=2 numa tabela de 9 colunas). O Word sabe a
-// largura de cada gridCol e renderiza certo, mas navegadores e o TCPDF
-// recalculam a largura das colunas com base no que CADA LINHA declara --
-// se as linhas tem numeros de colunas diferentes, o alinhamento entre
-// linhas se perde (colunas de uma linha nao bate com a de outra).
-// Correcao: completa o colspan que falta na ultima celula da linha,
-// para que toda linha sempre some o mesmo total de colunas da grade.
-function fixLastCellSpan(lastCellHTML, currentColspan, missing) {
-  var newSpan = currentColspan + missing;
-  if (currentColspan > 1) {
-    return lastCellHTML.replace('colspan="' + currentColspan + '"', 'colspan="' + newSpan + '"');
-  }
-  return lastCellHTML.replace('<td', '<td colspan="' + newSpan + '"');
+// Conta so os <w:gridCol> (o tblGrid pode ter outros filhos, como
+// w:tblGridChange, que antes eram contados como coluna e desalinhavam tudo).
+function countGridCols(tblGrid) {
+  var n = 0;
+  if (!tblGrid) return 0;
+  for (var i = 0; i < tblGrid.children.length; i++) if (getLN(tblGrid.children[i]) === 'gridCol') n++;
+  return n;
 }
 
 // Le as larguras REAIS das colunas no <w:tblGrid> e devolve um array de
@@ -473,118 +814,104 @@ function gridColWidths(tblGrid, numCols) {
   return widths;
 }
 
+// Le a tabela uma vez so (usado por CK4 e CK5): numero de colunas, larguras
+// e, por linha, as celulas visiveis com colspan ja corrigido.
+//
+// O Word permite que uma linha preencha menos colunas que o total da grade
+// (ex: um titulo com colspan=2 numa tabela de 9 colunas). O Word sabe a
+// largura de cada gridCol e renderiza certo, mas navegadores e o TCPDF
+// recalculam a largura das colunas com base no que CADA LINHA declara --
+// se as linhas tem numeros de colunas diferentes, o alinhamento entre
+// linhas se perde. Correcao: completa o colspan que falta na ultima celula
+// da linha, para que toda linha sempre some o mesmo total de colunas.
+function readTable(tblEl) {
+  var tblGrid = getChild(tblEl, 'tblGrid');
+  var rowEls  = flatChildren(tblEl, { tr:1 });
+  var rows = [];
+  var maxFilled = 0;
+  for (var i = 0; i < rowEls.length; i++) {
+    var tcs = flatChildren(rowEls[i], { tc:1 });
+    var cells = [], filled = 0;
+    for (var j = 0; j < tcs.length; j++) {
+      if (isSkipRow(tcs[j])) continue;
+      var cs = getColspan(tcs[j]);
+      cells.push({ html: cellToHTML(tcs[j]), cs: cs });
+      filled += cs;
+    }
+    if (filled > maxFilled) maxFilled = filled;
+    rows.push({ cells: cells, filled: filled });
+  }
+  // Sem tblGrid valido, usa a linha mais larga como numero de colunas
+  var numCols = countGridCols(tblGrid) || maxFilled || 1;
+  for (var r = 0; r < rows.length; r++) {
+    var missing = numCols - rows[r].filled;
+    var cl = rows[r].cells;
+    if (missing > 0 && cl.length) cl[cl.length - 1].cs += missing;
+  }
+  return { numCols: numCols, widths: gridColWidths(tblGrid, numCols), rows: rows };
+}
+
+function colgroupHTML(t) {
+  var h = '<colgroup>';
+  for (var i = 0; i < t.numCols; i++) h += '<col style="width:' + t.widths[i] + '%;">';
+  return h + '</colgroup>';
+}
+function spanAttr(cs) { return cs > 1 ? ' colspan="' + cs + '"' : ''; }
+
 // ════════════════════════════════════════
 // TABELA CK4
 // ════════════════════════════════════════
 function tableToHTMLCK4(tblEl) {
-  var tblGrid  = getChild(tblEl, 'tblGrid');
-  var numCols  = tblGrid ? tblGrid.children.length : 0;
+  var t = readTable(tblEl);
   var html = '<table border="1" cellpadding="1" cellspacing="1" style="width:100%;">\n';
-  if (numCols > 0) {
-    var widths = gridColWidths(tblGrid, numCols);
-    html += '\t<colgroup>';
-    for (var w = 0; w < numCols; w++) html += '<col style="width:' + widths[w] + '%;">';
-    html += '</colgroup>\n';
-  }
-  html += '\t<tbody>\n';
-
-  for (var i = 0; i < tblEl.children.length; i++) {
-    var row = tblEl.children[i];
-    if (getLN(row) !== 'tr') continue;
-
-    var filled  = numCols > 0 ? rowFilledCols(row) : 0;
-    var missing = numCols > 0 ? (numCols - filled) : 0;
-
-    var cellsHTML = [];
-    var lastCs = 1;
-    for (var j = 0; j < row.children.length; j++) {
-      var tc = row.children[j];
-      if (getLN(tc) !== 'tc' || isSkipRow(tc)) continue;
-      var cs = getColspan(tc);
-      lastCs = cs;
-      cellsHTML.push('\t\t\t<td' + (cs > 1 ? ' colspan="' + cs + '"' : '') + '>' + cellToHTML(tc) + '</td>\n');
+  html += '\t' + colgroupHTML(t) + '\n\t<tbody>\n';
+  for (var i = 0; i < t.rows.length; i++) {
+    html += '\t\t<tr>\n';
+    var cl = t.rows[i].cells;
+    for (var j = 0; j < cl.length; j++) {
+      html += '\t\t\t<td' + spanAttr(cl[j].cs) + '>' + cl[j].html + '</td>\n';
     }
-
-    if (missing > 0 && cellsHTML.length > 0) {
-      var lastIdx = cellsHTML.length - 1;
-      cellsHTML[lastIdx] = fixLastCellSpan(cellsHTML[lastIdx], lastCs, missing);
-    }
-
-    html += '\t\t<tr>\n' + cellsHTML.join('') + '\t\t</tr>\n';
+    html += '\t\t</tr>\n';
   }
   return html + '\t</tbody>\n</table>';
-}
-
-function docToHTMLCK4(bodyEl) {
-  var parts = [];
-  for (var i = 0; i < bodyEl.children.length; i++) {
-    var c = bodyEl.children[i], ln = getLN(c);
-    if (ln === 'p') {
-      var r = paraToHTML(c);
-      if (r.text.trim()) {
-        var style = r.align ? ' style="text-align:' + r.align + ';"' : '';
-        parts.push('<p' + style + '>' + r.text + '</p>');
-      }
-    }
-    else if (ln === 'tbl') parts.push(tableToHTMLCK4(c));
-  }
-  return parts.join('\n');
 }
 
 // ════════════════════════════════════════
 // TABELA CK5
 // ════════════════════════════════════════
 function tableToHTMLCK5(tblEl) {
-  var tblGrid = getChild(tblEl, 'tblGrid');
-  var numCols = tblGrid ? tblGrid.children.length : 1;
-  var widths  = gridColWidths(tblGrid, numCols);
-  var colgroup = '<colgroup>';
-  for (var i = 0; i < numCols; i++) colgroup += '<col style="width:' + widths[i] + '%;">';
-  colgroup += '</colgroup>';
-
+  var t = readTable(tblEl);
   var html = '<figure class="table" style="width:100%;">\n';
   html    += '<table class="ck-table-resized" style="border-style:solid;">\n';
-  html    += colgroup + '\n<tbody>\n';
-
-  for (var i = 0; i < tblEl.children.length; i++) {
-    var row = tblEl.children[i];
-    if (getLN(row) !== 'tr') continue;
-
-    var filled  = numCols > 0 ? rowFilledCols(row) : 0;
-    var missing = numCols > 0 ? (numCols - filled) : 0;
-
-    var cellsHTML = [];
-    var lastCs = 1;
-    for (var j = 0; j < row.children.length; j++) {
-      var tc = row.children[j];
-      if (getLN(tc) !== 'tc' || isSkipRow(tc)) continue;
-      var cs = getColspan(tc);
-      lastCs = cs;
-      cellsHTML.push('<td style="border-color:#000000;"' + (cs > 1 ? ' colspan="' + cs + '"' : '') + '>' + cellToHTML(tc) + '</td>\n');
+  html    += colgroupHTML(t) + '\n<tbody>\n';
+  for (var i = 0; i < t.rows.length; i++) {
+    html += '<tr>\n';
+    var cl = t.rows[i].cells;
+    for (var j = 0; j < cl.length; j++) {
+      html += '<td style="border-color:#000000;"' + spanAttr(cl[j].cs) + '>' + cl[j].html + '</td>\n';
     }
-
-    if (missing > 0 && cellsHTML.length > 0) {
-      var lastIdx = cellsHTML.length - 1;
-      cellsHTML[lastIdx] = fixLastCellSpan(cellsHTML[lastIdx], lastCs, missing);
-    }
-
-    html += '<tr>\n' + cellsHTML.join('') + '</tr>\n';
+    html += '</tr>\n';
   }
   return html + '</tbody>\n</table>\n</figure>';
 }
 
-function docToHTMLCK5(bodyEl) {
+// ════════════════════════════════════════
+// DOCUMENTO (paragrafos + tabelas do body)
+// ════════════════════════════════════════
+function docToHTML(bodyEl, mode) {
+  var tableFn = mode === 'ck5' ? tableToHTMLCK5 : tableToHTMLCK4;
   var parts = [];
-  for (var i = 0; i < bodyEl.children.length; i++) {
-    var c = bodyEl.children[i], ln = getLN(c);
-    if (ln === 'p') {
+  var kids = flatChildren(bodyEl, { p:1, tbl:1 });
+  for (var i = 0; i < kids.length; i++) {
+    var c = kids[i];
+    if (getLN(c) === 'p') {
       var r = paraToHTML(c);
       if (r.text.trim()) {
         var style = r.align ? ' style="text-align:' + r.align + ';"' : '';
         parts.push('<p' + style + '>' + r.text + '</p>');
       }
     }
-    else if (ln === 'tbl') parts.push(tableToHTMLCK5(c));
+    else parts.push(tableFn(c));
   }
   return parts.join('\n');
 }
@@ -592,19 +919,28 @@ function docToHTMLCK5(bodyEl) {
 // ════════════════════════════════════════
 // PROCESSAMENTO PRINCIPAL
 // ════════════════════════════════════════
-async function processDocx(arrayBuffer) {
+async function readZipText(zip, path) {
+  var f = zip.file(path);
+  return f ? await f.async('string') : null;
+}
+
+async function processDocx(arrayBuffer, mode) {
   var zip    = await JSZip.loadAsync(arrayBuffer);
-  var xmlStr = await zip.file('word/document.xml').async('string');
-  var doc    = parseXML(xmlStr);
-  var body   = doc.querySelector('body');
-  if (!body) {
-    var all = doc.documentElement.querySelectorAll('*');
-    for (var i = 0; i < all.length; i++) {
-      if ((all[i].localName || all[i].tagName).replace(/^.*:/, '') === 'body') { body = all[i]; break; }
-    }
+  var xmlStr = await readZipText(zip, 'word/document.xml');
+  if (!xmlStr) throw new Error('Documento invalido (sem word/document.xml).');
+  CTX = {
+    styles:    parseStyles(await readZipText(zip, 'word/styles.xml')),
+    numbering: parseNumbering(await readZipText(zip, 'word/numbering.xml')),
+    counters:  {}
+  };
+  var doc  = parseXML(xmlStr);
+  var body = null;
+  var all  = doc.getElementsByTagName('*');
+  for (var i = 0; i < all.length; i++) {
+    if (getLN(all[i]) === 'body') { body = all[i]; break; }
   }
   if (!body) throw new Error('Documento invalido.');
-  return currentMode === 'ck5' ? docToHTMLCK5(body) : docToHTMLCK4(body);
+  return docToHTML(body, mode);
 }
 
 // ════════════════════════════════════════
@@ -626,7 +962,8 @@ function showResult(html) {
   document.querySelector('[data-tab="Prev"]').click();
 }
 
-function addHistory(name, size, html, mode) {
+function addHistory(file, html, mode) {
+  var name = file.name, size = file.size;
   // Evita duplicar o mesmo arquivo no historico. Se ja existe uma conversao
   // do mesmo arquivo (mesmo nome e tamanho), remove a antiga antes de inserir
   // a nova no topo. Assim, trocar de versao (CK5 <-> CK4) ou reconverter o
@@ -637,7 +974,7 @@ function addHistory(name, size, html, mode) {
       fileHistory.splice(i, 1);
     }
   }
-  fileHistory.unshift({ name:name, size:size, html:html, mode:mode, date:new Date() });
+  fileHistory.unshift({ name:name, size:size, file:file, html:html, mode:mode, date:new Date() });
   if (fileHistory.length > 10) fileHistory.pop();
   renderHistory();
 }
@@ -657,7 +994,13 @@ function renderHistory() {
 
 function loadHist(i) {
   var h = fileHistory[i];
-  setMode(h.mode);
+  if (!h) return;
+  // Antes: setMode() reconvertia o ULTIMO arquivo carregado (lastFile) de forma
+  // assincrona, e ele sobrescrevia o item do historico que acabou de abrir.
+  // Agora o item clicado vira o arquivo atual e a troca de modo nao reconverte.
+  convSeq++;   // descarta qualquer conversao que ainda esteja em andamento
+  lastFile = h.file;
+  setMode(h.mode, true);
   showResult(h.html);
   document.getElementById('fname').textContent = h.name;
   document.getElementById('fsize').textContent = fmt(h.size);
@@ -666,18 +1009,26 @@ function loadHist(i) {
 }
 
 async function handleFile(file) {
-  if (!file || !file.name.endsWith('.docx')) { setStatus('err', 'Use um arquivo .docx'); return; }
+  if (!file || !/\.docx$/i.test(file.name)) { setStatus('err', 'Use um arquivo .docx'); return; }
   lastFile = file;
+  var mode = currentMode;
+  var seq  = ++convSeq;
   document.getElementById('fname').textContent   = file.name;
   document.getElementById('fsize').textContent   = fmt(file.size);
   document.getElementById('finfo').style.display = 'flex';
-  setStatus('loading', 'Convertendo para ' + MODES[currentMode].label + '...');
+  setStatus('loading', 'Convertendo para ' + MODES[mode].label + '...');
   try {
-    var html = await processDocx(await file.arrayBuffer());
+    var html = await processDocx(await file.arrayBuffer(), mode);
+    // Se outra conversao comecou nesse meio tempo (troca de modo, outro
+    // arquivo, clique no historico), este resultado esta velho: descarta.
+    if (seq !== convSeq) return;
     showResult(html);
-    addHistory(file.name, file.size, html, currentMode);
-    setStatus('ok', MODES[currentMode].label + ' \u00b7 ' + file.name + ' \u00b7 ' + html.length.toLocaleString('pt-BR') + ' chars');
-  } catch(e) { setStatus('err', 'Erro: ' + e.message); console.error(e); }
+    addHistory(file, html, mode);
+    setStatus('ok', MODES[mode].label + ' \u00b7 ' + file.name + ' \u00b7 ' + html.length.toLocaleString('pt-BR') + ' chars');
+  } catch(e) {
+    if (seq !== convSeq) return;
+    setStatus('err', 'Erro: ' + e.message); console.error(e);
+  }
 }
 
 function copyHTML() {
@@ -717,7 +1068,7 @@ function copyHTML() {
 }
 
 function clearAll() {
-  currentHTML = ''; lastFile = null;
+  currentHTML = ''; lastFile = null; convSeq++;
   document.getElementById('prevC').innerHTML =
     '<div class="empty"><div class="empty-icon">&#128203;</div>' +
     '<h3>Nenhum arquivo convertido</h3>' +
