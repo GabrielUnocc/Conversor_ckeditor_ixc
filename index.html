@@ -203,6 +203,7 @@ var currentMode = 'ck5';
 var currentHTML = '';
 var lastFile    = null;
 var fileHistory = [];
+var convSeq     = 0;   // id da conversao mais recente (descarta resultados velhos)
 
 var MODES = {
   ck5: {
@@ -224,7 +225,8 @@ var MODES = {
 // ════════════════════════════════════════
 // TROCA DE MODO
 // ════════════════════════════════════════
-function setMode(mode) {
+// noReconvert = true quando quem chama ja tem o HTML pronto (ex: historico)
+function setMode(mode, noReconvert) {
   currentMode = mode;
   var m = MODES[mode];
   var s = document.documentElement.style;
@@ -240,7 +242,7 @@ function setMode(mode) {
   document.getElementById('htmlCode').style.color    = m.codeColor;
   document.getElementById('headerLogo').style.background =
     'linear-gradient(135deg,' + m.accent + ',' + m.accent2 + ')';
-  if (lastFile) handleFile(lastFile);
+  if (lastFile && !noReconvert) handleFile(lastFile);
 }
 
 // ════════════════════════════════════════
@@ -592,7 +594,7 @@ function docToHTMLCK5(bodyEl) {
 // ════════════════════════════════════════
 // PROCESSAMENTO PRINCIPAL
 // ════════════════════════════════════════
-async function processDocx(arrayBuffer) {
+async function processDocx(arrayBuffer, mode) {
   var zip    = await JSZip.loadAsync(arrayBuffer);
   var xmlStr = await zip.file('word/document.xml').async('string');
   var doc    = parseXML(xmlStr);
@@ -604,7 +606,7 @@ async function processDocx(arrayBuffer) {
     }
   }
   if (!body) throw new Error('Documento invalido.');
-  return currentMode === 'ck5' ? docToHTMLCK5(body) : docToHTMLCK4(body);
+  return mode === 'ck5' ? docToHTMLCK5(body) : docToHTMLCK4(body);
 }
 
 // ════════════════════════════════════════
@@ -626,7 +628,8 @@ function showResult(html) {
   document.querySelector('[data-tab="Prev"]').click();
 }
 
-function addHistory(name, size, html, mode) {
+function addHistory(file, html, mode) {
+  var name = file.name, size = file.size;
   // Evita duplicar o mesmo arquivo no historico. Se ja existe uma conversao
   // do mesmo arquivo (mesmo nome e tamanho), remove a antiga antes de inserir
   // a nova no topo. Assim, trocar de versao (CK5 <-> CK4) ou reconverter o
@@ -637,7 +640,7 @@ function addHistory(name, size, html, mode) {
       fileHistory.splice(i, 1);
     }
   }
-  fileHistory.unshift({ name:name, size:size, html:html, mode:mode, date:new Date() });
+  fileHistory.unshift({ name:name, size:size, file:file, html:html, mode:mode, date:new Date() });
   if (fileHistory.length > 10) fileHistory.pop();
   renderHistory();
 }
@@ -657,7 +660,13 @@ function renderHistory() {
 
 function loadHist(i) {
   var h = fileHistory[i];
-  setMode(h.mode);
+  if (!h) return;
+  // Antes: setMode() reconvertia o ULTIMO arquivo carregado (lastFile) de forma
+  // assincrona, e ele sobrescrevia o item do historico que acabou de abrir.
+  // Agora o item clicado vira o arquivo atual e a troca de modo nao reconverte.
+  convSeq++;   // descarta qualquer conversao que ainda esteja em andamento
+  lastFile = h.file;
+  setMode(h.mode, true);
   showResult(h.html);
   document.getElementById('fname').textContent = h.name;
   document.getElementById('fsize').textContent = fmt(h.size);
@@ -666,18 +675,26 @@ function loadHist(i) {
 }
 
 async function handleFile(file) {
-  if (!file || !file.name.endsWith('.docx')) { setStatus('err', 'Use um arquivo .docx'); return; }
+  if (!file || !/\.docx$/i.test(file.name)) { setStatus('err', 'Use um arquivo .docx'); return; }
   lastFile = file;
+  var mode = currentMode;
+  var seq  = ++convSeq;
   document.getElementById('fname').textContent   = file.name;
   document.getElementById('fsize').textContent   = fmt(file.size);
   document.getElementById('finfo').style.display = 'flex';
-  setStatus('loading', 'Convertendo para ' + MODES[currentMode].label + '...');
+  setStatus('loading', 'Convertendo para ' + MODES[mode].label + '...');
   try {
-    var html = await processDocx(await file.arrayBuffer());
+    var html = await processDocx(await file.arrayBuffer(), mode);
+    // Se outra conversao comecou nesse meio tempo (troca de modo, outro
+    // arquivo, clique no historico), este resultado esta velho: descarta.
+    if (seq !== convSeq) return;
     showResult(html);
-    addHistory(file.name, file.size, html, currentMode);
-    setStatus('ok', MODES[currentMode].label + ' \u00b7 ' + file.name + ' \u00b7 ' + html.length.toLocaleString('pt-BR') + ' chars');
-  } catch(e) { setStatus('err', 'Erro: ' + e.message); console.error(e); }
+    addHistory(file, html, mode);
+    setStatus('ok', MODES[mode].label + ' \u00b7 ' + file.name + ' \u00b7 ' + html.length.toLocaleString('pt-BR') + ' chars');
+  } catch(e) {
+    if (seq !== convSeq) return;
+    setStatus('err', 'Erro: ' + e.message); console.error(e);
+  }
 }
 
 function copyHTML() {
@@ -717,7 +734,7 @@ function copyHTML() {
 }
 
 function clearAll() {
-  currentHTML = ''; lastFile = null;
+  currentHTML = ''; lastFile = null; convSeq++;
   document.getElementById('prevC').innerHTML =
     '<div class="empty"><div class="empty-icon">&#128203;</div>' +
     '<h3>Nenhum arquivo convertido</h3>' +
