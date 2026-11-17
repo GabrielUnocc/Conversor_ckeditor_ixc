@@ -291,12 +291,13 @@ function collectRuns(el, out) {
 }
 
 // ════════════════════════════════════════
-// CONTEXTO DO DOCUMENTO: ESTILOS
+// CONTEXTO DO DOCUMENTO: ESTILOS E NUMERACAO
 // ════════════════════════════════════════
 // POR QUE (issue #7): em muitos .docx o negrito e o alinhamento dos titulos
 // NAO estao no paragrafo, e sim no ESTILO (ex: "Titulo 1" e negrito e
 // centralizado em word/styles.xml). Sem ler os estilos, os titulos saiam como
-// texto comum.
+// texto comum. O mesmo vale para a numeracao de listas ("1.", "2.", "\u2022"),
+// que fica em word/numbering.xml.
 var CTX = null;
 
 // Le <w:b>/<w:i>: null = nao definido aqui; true/false = ligado/desligado.
@@ -325,6 +326,16 @@ function applyFmt(base, over) {
     hidden: over.hidden !== null ? over.hidden : base.hidden
   };
 }
+function readNumPr(pPr) {
+  var np = pPr ? getChild(pPr, 'numPr') : null;
+  if (!np) return null;
+  var idEl = getChild(np, 'numId'), lvEl = getChild(np, 'ilvl');
+  return {
+    numId: idEl ? (getWAttr(idEl, 'val') || null) : null,
+    ilvl:  lvEl ? (getWAttr(lvEl, 'val') || null) : null
+  };
+}
+
 function parseStyles(xmlStr) {
   var res = { raw: {}, resolved: {}, defFmt: { b:false, i:false, u:false, hidden:false }, defaultPara: null };
   if (!xmlStr) return res;
@@ -344,7 +355,8 @@ function parseStyles(xmlStr) {
       res.raw[id] = {
         basedOn: bo ? getWAttr(bo, 'val') : null,
         fmt:     readRunFmt(getChild(c, 'rPr')),
-        jc:      jc ? (getWAttr(jc, 'val') || null) : null
+        jc:      jc ? (getWAttr(jc, 'val') || null) : null,
+        numPr:   readNumPr(pPr)
       };
       var isDef = getWAttr(c, 'default');
       if (getWAttr(c, 'type') === 'paragraph' && (isDef === '1' || isDef === 'true')) res.defaultPara = id;
@@ -353,17 +365,119 @@ function parseStyles(xmlStr) {
   return res;
 }
 
-// Resolve a cadeia basedOn de um estilo e devolve { fmt, jc } efetivos.
+// Resolve a cadeia basedOn de um estilo e devolve { fmt, jc, numPr } efetivos.
 function resolveStyle(id, depth) {
   var S = CTX.styles;
-  var empty = { fmt: S.defFmt, jc: null };
+  var empty = { fmt: S.defFmt, jc: null, numPr: null };
   if (!id || !S.raw[id] || (depth || 0) > 20) return empty;
   if (S.resolved[id]) return S.resolved[id];
   var st   = S.raw[id];
   var base = st.basedOn ? resolveStyle(st.basedOn, (depth || 0) + 1) : empty;
-  var r = { fmt: applyFmt(base.fmt, st.fmt), jc: st.jc || base.jc };
+  var np   = base.numPr;
+  if (st.numPr) np = { numId: st.numPr.numId || (np && np.numId), ilvl: st.numPr.ilvl || (np && np.ilvl) };
+  var r = { fmt: applyFmt(base.fmt, st.fmt), jc: st.jc || base.jc, numPr: np };
   S.resolved[id] = r;
   return r;
+}
+
+function parseNumbering(xmlStr) {
+  var res = { abstracts: {}, nums: {} };
+  if (!xmlStr) return res;
+  var root = parseXML(xmlStr).documentElement;
+  function readLevels(parent, into) {
+    for (var k = 0; k < parent.children.length; k++) {
+      var lv = parent.children[k];
+      if (getLN(lv) !== 'lvl') continue;
+      var st = getChild(lv, 'start'), nf = getChild(lv, 'numFmt'), lt = getChild(lv, 'lvlText');
+      into[getWAttr(lv, 'ilvl') || '0'] = {
+        start: st ? parseInt(getWAttr(st, 'val') || '1', 10) : 1,
+        fmt:   nf ? (getWAttr(nf, 'val') || 'decimal') : 'decimal',
+        text:  lt ? (getWAttr(lt, 'val') || '') : ''
+      };
+    }
+  }
+  for (var i = 0; i < root.children.length; i++) {
+    var c = root.children[i], ln = getLN(c);
+    if (ln === 'abstractNum') {
+      var lv = {};
+      readLevels(c, lv);
+      res.abstracts[getWAttr(c, 'abstractNumId')] = lv;
+    } else if (ln === 'num') {
+      var an = getChild(c, 'abstractNumId');
+      var ov = {};
+      for (var j = 0; j < c.children.length; j++) {
+        var o = c.children[j];
+        if (getLN(o) !== 'lvlOverride') continue;
+        var so = getChild(o, 'startOverride');
+        var lvlO = getChild(o, 'lvl');
+        var key = getWAttr(o, 'ilvl') || '0';
+        ov[key] = {};
+        if (so) ov[key].start = parseInt(getWAttr(so, 'val') || '1', 10);
+        if (lvlO) { var tmp = {}; readLevels(o, tmp); if (tmp[key]) ov[key].lvl = tmp[key]; }
+      }
+      res.nums[getWAttr(c, 'numId')] = { abs: an ? getWAttr(an, 'val') : null, ov: ov };
+    }
+  }
+  return res;
+}
+
+function toRoman(n) {
+  var v = [1000,900,500,400,100,90,50,40,10,9,5,4,1];
+  var s = ['M','CM','D','CD','C','XC','L','XL','X','IX','V','IV','I'];
+  var r = '';
+  for (var i = 0; i < v.length; i++) while (n >= v[i]) { r += s[i]; n -= v[i]; }
+  return r;
+}
+function toLetter(n) {
+  if (n < 1) return '';
+  var r = '';
+  while (n > 0) { n--; r = String.fromCharCode(97 + (n % 26)) + r; n = Math.floor(n / 26); }
+  return r;
+}
+function fmtNumber(n, fmt) {
+  if (fmt === 'lowerLetter') return toLetter(n);
+  if (fmt === 'upperLetter') return toLetter(n).toUpperCase();
+  if (fmt === 'lowerRoman')  return toRoman(n).toLowerCase();
+  if (fmt === 'upperRoman')  return toRoman(n);
+  if (fmt === 'decimalZero') return (n < 10 ? '0' : '') + n;
+  return String(n);
+}
+// Marcadores do Word costumam usar caracteres das fontes Symbol/Wingdings
+// (area privada U+F0xx) que nao existem nas fontes do TCPDF -> vira "\u2022".
+function bulletChar(t) {
+  if (t === 'o' || t === '-' || t === '\u2013' || t === '\u2022') return t;
+  return '\u2022';
+}
+
+function getLevelDef(numId, ilvl) {
+  var num = CTX.numbering.nums[numId];
+  if (!num) return null;
+  var abs = CTX.numbering.abstracts[num.abs] || {};
+  var lv  = abs[ilvl];
+  var ov  = num.ov[ilvl];
+  if (ov && ov.lvl) lv = ov.lvl;
+  if (!lv) return null;
+  var start = (ov && ov.start !== undefined) ? ov.start : lv.start;
+  return { start: start, fmt: lv.fmt, text: lv.text };
+}
+
+// Devolve o rotulo do proximo item da lista ("1.", "a)", "\u2022"...) ou ''.
+function nextListLabel(numId, ilvl) {
+  if (!numId || numId === '0') return '';
+  ilvl = parseInt(ilvl || '0', 10);
+  var def = getLevelDef(numId, String(ilvl));
+  if (!def) return '';
+  var cnt = CTX.counters[numId] || (CTX.counters[numId] = {});
+  cnt[ilvl] = (cnt[ilvl] === undefined) ? def.start : cnt[ilvl] + 1;
+  for (var k in cnt) if (parseInt(k, 10) > ilvl) delete cnt[k];
+  if (def.fmt === 'none') return '';
+  if (def.fmt === 'bullet') return bulletChar(def.text);
+  return def.text.replace(/%(\d)/g, function(_, d) {
+    var L = parseInt(d, 10) - 1;
+    var ld = getLevelDef(numId, String(L)) || { start: 1, fmt: 'decimal' };
+    var v = cnt[L] !== undefined ? cnt[L] : ld.start;
+    return fmtNumber(v, ld.fmt);
+  });
 }
 
 // ════════════════════════════════════════
@@ -427,6 +541,19 @@ function paraToHTML(pEl) {
 
   // 1) Coleta os runs do paragrafo como "pecas".
   var pieces = [];
+
+  // Numeracao/marcador da lista (direto no paragrafo ou herdado do estilo).
+  // A formatacao do rotulo segue a "marca de paragrafo" (pPr > rPr) + estilo.
+  var np = readNumPr(pPr) || st.numPr;
+  if (np) {
+    var numId = np.numId || (st.numPr && st.numPr.numId);
+    var ilvl  = np.ilvl  || (st.numPr && st.numPr.ilvl) || '0';
+    var label = nextListLabel(numId, ilvl);
+    if (label) {
+      var lf = applyFmt(st.fmt, readRunFmt(pPr ? getChild(pPr, 'rPr') : null));
+      pieces.push({ text: escText(label) + '\u00a0', b: !!lf.b, i: !!lf.i, u: false });
+    }
+  }
 
   var runs = collectRuns(pEl, []);
   for (var i = 0; i < runs.length; i++) {
@@ -673,7 +800,9 @@ async function processDocx(arrayBuffer, mode) {
   var xmlStr = await readZipText(zip, 'word/document.xml');
   if (!xmlStr) throw new Error('Documento invalido (sem word/document.xml).');
   CTX = {
-    styles:    parseStyles(await readZipText(zip, 'word/styles.xml'))
+    styles:    parseStyles(await readZipText(zip, 'word/styles.xml')),
+    numbering: parseNumbering(await readZipText(zip, 'word/numbering.xml')),
+    counters:  {}
   };
   var doc  = parseXML(xmlStr);
   var body = null;
