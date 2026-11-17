@@ -481,14 +481,88 @@ function nextListLabel(numId, ilvl) {
 }
 
 // ════════════════════════════════════════
+// TABULACOES E LINHAS DESENHADAS
+// ════════════════════════════════════════
+// POR QUE (issue #7): campos para preencher ("Assinatura: ______",
+// "Declaro que recebi no dia __/__/____") sao feitos no Word com TABULACAO
+// SUBLINHADA, e as linhas de assinatura muitas vezes sao LINHAS DESENHADAS
+// (formas). Nenhum dos dois era convertido -- as linhas sumiam. Agora viram
+// sublinhados ("_") com comprimento proporcional ao do Word. Usamos "_" e nao
+// CSS/borda porque e o que imprime de forma confiavel no TCPDF.
+//
+// A posicao horizontal e ESTIMADA (~110 twips por caractere de texto), so para
+// saber ate qual parada de tabulacao o sublinhado deve ir.
+var TW_PER_CHAR = 110;   // largura media de um caractere em twips (11pt)
+var TW_PER_UNDER = 120;  // largura de um "_" em twips (11pt)
+
+function readTabStops(pPr) {
+  var stops = [];
+  var tabs = pPr ? getChild(pPr, 'tabs') : null;
+  if (!tabs) return stops;
+  for (var i = 0; i < tabs.children.length; i++) {
+    var t = tabs.children[i];
+    if (getLN(t) !== 'tab' || getWAttr(t, 'val') === 'clear') continue;
+    var pos = parseInt(getWAttr(t, 'pos') || '0', 10);
+    if (!isNaN(pos)) stops.push(pos);
+  }
+  return stops.sort(function(a, b) { return a - b; });
+}
+function nextTabStop(ps) {
+  for (var i = 0; i < ps.stops.length; i++) if (ps.stops[i] > ps.x + 20) return ps.stops[i];
+  return (Math.floor(ps.x / 720) + 1) * 720;   // parada padrao do Word: 0,5"
+}
+
+// Largura (twips) de uma linha horizontal desenhada em <w:drawing>, ou 0.
+function lineFromDrawing(dr) {
+  var holder = getChild(dr, 'inline') || getChild(dr, 'anchor');
+  if (!holder) return 0;
+  var ext = getChild(holder, 'extent');
+  if (!ext) return 0;
+  if (holder.getElementsByTagNameNS('*', 'pic').length) return 0;   // imagem, nao linha
+  var cx = parseInt(ext.getAttribute('cx') || '0', 10);
+  var cy = parseInt(ext.getAttribute('cy') || '0', 10);
+  if (cx > 0 && cy <= 30000 && cx >= cy * 20) return Math.round(cx / 635);  // EMU -> twips
+  return 0;
+}
+// Mesma coisa para o formato antigo VML (<w:pict>).
+function lineFromPict(pict) {
+  var all = pict.getElementsByTagName('*');
+  for (var i = 0; i < all.length; i++) {
+    var el = all[i], ln = getLN(el);
+    if (ln === 'imagedata') return 0;
+    if (ln !== 'line' && ln !== 'shape' && ln !== 'group' && ln !== 'rect') continue;
+    if (el.getAttribute('o:hr') === 't') return 9000;
+    var st = el.getAttribute('style') || '';
+    var w = st.match(/(?:^|;)\s*width:\s*([\d.]+)pt/);
+    var h = st.match(/(?:^|;)\s*height:\s*([\d.]+)pt/);
+    if (w && h && parseFloat(h[1]) <= 1.5) return Math.round(parseFloat(w[1]) * 20);
+  }
+  return 0;
+}
+function lineFromAny(el) {
+  var ln = getLN(el);
+  if (ln === 'drawing') return lineFromDrawing(el);
+  if (ln === 'pict')    return lineFromPict(el);
+  if (ln === 'AlternateContent') {
+    var ch = getChild(el, 'Choice'), fb = getChild(el, 'Fallback');
+    var w = 0;
+    if (ch) { var d = getChild(ch, 'drawing'); if (d) w = lineFromDrawing(d); }
+    if (!w && fb) { var p = getChild(fb, 'pict'); if (p) w = lineFromPict(p); }
+    return w;
+  }
+  return 0;
+}
+
+// ════════════════════════════════════════
 // RUNS E PARAGRAFOS
 // ════════════════════════════════════════
 // Extrai os dados de um <w:r>: texto (ja escapado) + formatacao (b/i/u).
 // NAO envolve em tags aqui de proposito -- quem envolve e paraToHTML, e
 // somente DEPOIS de juntar runs vizinhos de mesma formatacao (ver Bug 6
 // no comentario de paraToHTML). Retorna null se o run nao tem texto.
+//   ps      = estado do paragrafo { stops, x } (para tabulacoes)
 //   baseFmt = formatacao herdada do estilo do paragrafo
-function parseRun(rEl, baseFmt) {
+function parseRun(rEl, ps, baseFmt) {
   var rPr = getChild(rEl, 'rPr');
   var fmt = baseFmt;
   if (rPr) {
@@ -503,6 +577,7 @@ function parseRun(rEl, baseFmt) {
     var c = rEl.children[i], ln = getLN(c);
     if (ln === 't') {
       var t = c.textContent;
+      ps.x += t.length * TW_PER_CHAR;
       // Espaco UNICO entre palavras SEMPRE permanece espaco normal (quebravel).
       // Converter espaco unico para \u00a0 tira todos os pontos de quebra do
       // paragrafo e faz o TCPDF cortar palavras no meio ao imprimir o PDF
@@ -514,7 +589,24 @@ function parseRun(rEl, baseFmt) {
       }
       raw += escText(t);
     }
-    else if (ln === 'br') raw += '<br>';
+    else if (ln === 'br' || ln === 'cr') { raw += '<br>'; ps.x = 0; }
+    else if (ln === 'noBreakHyphen')     { raw += '-';    ps.x += TW_PER_CHAR; }
+    else if (ln === 'tab') {
+      var stop = nextTabStop(ps);
+      var gap  = Math.max(stop - ps.x, 240);
+      ps.x += gap;
+      // Tabulacao SUBLINHADA = campo para preencher -> "____".
+      // Tabulacao comum = espacamento -> alguns \u00a0.
+      if (fmt.u) raw += repeatStr('_', clamp(Math.round(gap / TW_PER_UNDER), 3, 80));
+      else       raw += repeatStr('\u00a0', clamp(Math.round(gap / TW_PER_CHAR), 1, 12));
+    }
+    else if (ln === 'drawing' || ln === 'pict' || ln === 'AlternateContent') {
+      var lw = lineFromAny(c);
+      if (lw > 0) {
+        raw += repeatStr('_', clamp(Math.round(lw / TW_PER_UNDER), 5, 80));
+        ps.x += lw;
+      }
+    }
   }
   if (raw === '') return null;
   return { text: raw, b: !!fmt.b, i: !!fmt.i, u: !!fmt.u };
@@ -539,6 +631,9 @@ function paraToHTML(pEl) {
   var jc    = pPr ? getChild(pPr, 'jc') : null;
   var align = mapJc(jc ? getWAttr(jc, 'val') : st.jc);
 
+  var ind = pPr ? getChild(pPr, 'ind') : null;
+  var ps  = { stops: readTabStops(pPr), x: ind ? (parseInt(getWAttr(ind, 'left') || getWAttr(ind, 'start') || '0', 10) || 0) : 0 };
+
   // 1) Coleta os runs do paragrafo como "pecas".
   var pieces = [];
 
@@ -552,12 +647,13 @@ function paraToHTML(pEl) {
     if (label) {
       var lf = applyFmt(st.fmt, readRunFmt(pPr ? getChild(pPr, 'rPr') : null));
       pieces.push({ text: escText(label) + '\u00a0', b: !!lf.b, i: !!lf.i, u: false });
+      ps.x += 360;
     }
   }
 
   var runs = collectRuns(pEl, []);
   for (var i = 0; i < runs.length; i++) {
-    var pr = parseRun(runs[i], st.fmt);
+    var pr = parseRun(runs[i], ps, st.fmt);
     if (pr) pieces.push(pr);
   }
 
