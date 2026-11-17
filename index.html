@@ -270,22 +270,32 @@ function repeatStr(s, n) { var r = ''; for (var i = 0; i < n; i++) r += s; retur
 function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 function escText(t) { return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
-// Devolve, em ordem, os filhos de "el" cujo localName esta em "wanted".
+// Elementos "envelope" do Word que nao sao conteudo, mas EMBRULHAM conteudo:
+// controles de conteudo (sdt), alteracoes controladas (ins/moveTo), XML
+// personalizado, smart tags, campos simples, hyperlinks. Antes eles eram
+// ignorados e o texto de dentro SUMIA do resultado. w:del / w:moveFrom
+// (texto excluido com controle de alteracoes) ficam de fora de proposito.
+var RUN_WRAPPERS   = { hyperlink:1, sdt:1, sdtContent:1, ins:1, moveTo:1, smartTag:1, customXml:1, fldSimple:1, dir:1, bdo:1 };
+var BLOCK_WRAPPERS = { sdt:1, sdtContent:1, customXml:1, ins:1, moveTo:1 };
+
+// Devolve, em ordem, os filhos de "el" cujo localName esta em "wanted",
+// atravessando os envelopes de bloco (ex: body -> sdt -> sdtContent -> p).
 function flatChildren(el, wanted) {
   var out = [];
   for (var i = 0; i < el.children.length; i++) {
     var c = el.children[i], ln = getLN(c);
     if (wanted[ln]) out.push(c);
+    else if (BLOCK_WRAPPERS[ln]) out = out.concat(flatChildren(c, wanted));
   }
   return out;
 }
 
-// Coleta os <w:r> de um paragrafo (inclusive dentro de hyperlink).
+// Coleta os <w:r> de um paragrafo, atravessando hyperlink, sdt, ins etc.
 function collectRuns(el, out) {
   for (var i = 0; i < el.children.length; i++) {
     var c = el.children[i], ln = getLN(c);
     if (ln === 'r') out.push(c);
-    else if (ln === 'hyperlink') collectRuns(c, out);
+    else if (RUN_WRAPPERS[ln]) collectRuns(c, out);
   }
   return out;
 }
@@ -712,13 +722,36 @@ function paraToHTML(pEl) {
 // ════════════════════════════════════════
 function cellToHTML(tcEl) {
   var lines = [];
-  var kids = flatChildren(tcEl, { p:1 });
+  var kids = flatChildren(tcEl, { p:1, tbl:1 });
   for (var i = 0; i < kids.length; i++) {
-    var r = paraToHTML(kids[i]);
-    var style = r.align ? ' style="text-align:' + r.align + ';"' : '';
-    if (r.text.trim()) lines.push('<span' + style + '>' + r.text + '</span>');
+    if (getLN(kids[i]) === 'p') {
+      var r = paraToHTML(kids[i]);
+      var style = r.align ? ' style="text-align:' + r.align + ';"' : '';
+      if (r.text.trim()) lines.push('<span' + style + '>' + r.text + '</span>');
+    } else {
+      nestedTableLines(kids[i], lines);
+    }
   }
   return lines.length ? lines.join('<br>') : '&nbsp;';
+}
+
+// Tabela DENTRO de celula: o TCPDF nao renderiza bem tabela aninhada (era a
+// causa original do texto "letra por letra"), entao o conteudo dela vira
+// linhas de texto dentro da celula, uma por linha da tabela, com as celulas
+// separadas por "|". Antes esse conteudo era simplesmente descartado.
+function nestedTableLines(tblEl, lines) {
+  var rows = flatChildren(tblEl, { tr:1 });
+  for (var i = 0; i < rows.length; i++) {
+    var cells = flatChildren(rows[i], { tc:1 });
+    var parts = [];
+    for (var j = 0; j < cells.length; j++) {
+      if (isSkipRow(cells[j])) continue;
+      var h = cellToHTML(cells[j]);
+      if (h !== '&nbsp;') parts.push(h);
+    }
+    // &nbsp; e nao espaco comum: espaco solto entre tags o TCPDF descarta (Bug 6)
+    if (parts.length) lines.push(parts.join('&nbsp;|&nbsp;'));
+  }
 }
 
 function getColspan(tc) {
