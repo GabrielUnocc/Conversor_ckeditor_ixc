@@ -385,23 +385,35 @@ function paraToHTML(pEl) {
   return { text: html, align: align };
 }
 
-function cellToHTML(tcEl) {
-  var paras = [];
-  for (var i = 0; i < tcEl.children.length; i++) {
-    if (getLN(tcEl.children[i]) === 'p') {
-      var r = paraToHTML(tcEl.children[i]);
-      var style = r.align ? ' style="text-align:' + r.align + ';"' : '';
-      if (r.text.trim()) paras.push('<span' + style + '>' + r.text + '</span>');
-    }
+// Devolve, em ordem, os filhos de "el" cujo localName esta em "wanted".
+function flatChildren(el, wanted) {
+  var out = [];
+  for (var i = 0; i < el.children.length; i++) {
+    if (wanted[getLN(el.children[i])]) out.push(el.children[i]);
   }
-  return paras.length ? paras.join('<br>') : '&nbsp;';
+  return out;
+}
+
+// ════════════════════════════════════════
+// CELULAS E TABELAS (compartilhado)
+// ════════════════════════════════════════
+function cellToHTML(tcEl) {
+  var lines = [];
+  var kids = flatChildren(tcEl, { p:1 });
+  for (var i = 0; i < kids.length; i++) {
+    var r = paraToHTML(kids[i]);
+    var style = r.align ? ' style="text-align:' + r.align + ';"' : '';
+    if (r.text.trim()) lines.push('<span' + style + '>' + r.text + '</span>');
+  }
+  return lines.length ? lines.join('<br>') : '&nbsp;';
 }
 
 function getColspan(tc) {
   var tcPr = getChild(tc, 'tcPr');
   if (!tcPr) return 1;
   var gs = getChild(tcPr, 'gridSpan');
-  return gs ? parseInt(getWAttr(gs, 'val') || '1', 10) : 1;
+  var n = gs ? parseInt(getWAttr(gs, 'val') || '1', 10) : 1;
+  return n > 0 ? n : 1;
 }
 
 function isSkipRow(tc) {
@@ -411,32 +423,13 @@ function isSkipRow(tc) {
   return vm !== null && (getWAttr(vm, 'val') || '') !== 'restart';
 }
 
-// Conta quantas colunas a linha de fato preenche (soma de colspans),
-// ignorando celulas de vMerge continue (que nao aparecem na linha renderizada)
-function rowFilledCols(row) {
-  var sum = 0;
-  for (var i = 0; i < row.children.length; i++) {
-    var tc = row.children[i];
-    if (getLN(tc) !== 'tc' || isSkipRow(tc)) continue;
-    sum += getColspan(tc);
-  }
-  return sum;
-}
-
-// O Word permite que uma linha preencha menos colunas que o total da grade
-// (ex: um titulo com colspan=2 numa tabela de 9 colunas). O Word sabe a
-// largura de cada gridCol e renderiza certo, mas navegadores e o TCPDF
-// recalculam a largura das colunas com base no que CADA LINHA declara --
-// se as linhas tem numeros de colunas diferentes, o alinhamento entre
-// linhas se perde (colunas de uma linha nao bate com a de outra).
-// Correcao: completa o colspan que falta na ultima celula da linha,
-// para que toda linha sempre some o mesmo total de colunas da grade.
-function fixLastCellSpan(lastCellHTML, currentColspan, missing) {
-  var newSpan = currentColspan + missing;
-  if (currentColspan > 1) {
-    return lastCellHTML.replace('colspan="' + currentColspan + '"', 'colspan="' + newSpan + '"');
-  }
-  return lastCellHTML.replace('<td', '<td colspan="' + newSpan + '"');
+// Conta so os <w:gridCol> (o tblGrid pode ter outros filhos, como
+// w:tblGridChange, que antes eram contados como coluna e desalinhavam tudo).
+function countGridCols(tblGrid) {
+  var n = 0;
+  if (!tblGrid) return 0;
+  for (var i = 0; i < tblGrid.children.length; i++) if (getLN(tblGrid.children[i]) === 'gridCol') n++;
+  return n;
 }
 
 // Le as larguras REAIS das colunas no <w:tblGrid> e devolve um array de
@@ -475,118 +468,104 @@ function gridColWidths(tblGrid, numCols) {
   return widths;
 }
 
+// Le a tabela uma vez so (usado por CK4 e CK5): numero de colunas, larguras
+// e, por linha, as celulas visiveis com colspan ja corrigido.
+//
+// O Word permite que uma linha preencha menos colunas que o total da grade
+// (ex: um titulo com colspan=2 numa tabela de 9 colunas). O Word sabe a
+// largura de cada gridCol e renderiza certo, mas navegadores e o TCPDF
+// recalculam a largura das colunas com base no que CADA LINHA declara --
+// se as linhas tem numeros de colunas diferentes, o alinhamento entre
+// linhas se perde. Correcao: completa o colspan que falta na ultima celula
+// da linha, para que toda linha sempre some o mesmo total de colunas.
+function readTable(tblEl) {
+  var tblGrid = getChild(tblEl, 'tblGrid');
+  var rowEls  = flatChildren(tblEl, { tr:1 });
+  var rows = [];
+  var maxFilled = 0;
+  for (var i = 0; i < rowEls.length; i++) {
+    var tcs = flatChildren(rowEls[i], { tc:1 });
+    var cells = [], filled = 0;
+    for (var j = 0; j < tcs.length; j++) {
+      if (isSkipRow(tcs[j])) continue;
+      var cs = getColspan(tcs[j]);
+      cells.push({ html: cellToHTML(tcs[j]), cs: cs });
+      filled += cs;
+    }
+    if (filled > maxFilled) maxFilled = filled;
+    rows.push({ cells: cells, filled: filled });
+  }
+  // Sem tblGrid valido, usa a linha mais larga como numero de colunas
+  var numCols = countGridCols(tblGrid) || maxFilled || 1;
+  for (var r = 0; r < rows.length; r++) {
+    var missing = numCols - rows[r].filled;
+    var cl = rows[r].cells;
+    if (missing > 0 && cl.length) cl[cl.length - 1].cs += missing;
+  }
+  return { numCols: numCols, widths: gridColWidths(tblGrid, numCols), rows: rows };
+}
+
+function colgroupHTML(t) {
+  var h = '<colgroup>';
+  for (var i = 0; i < t.numCols; i++) h += '<col style="width:' + t.widths[i] + '%;">';
+  return h + '</colgroup>';
+}
+function spanAttr(cs) { return cs > 1 ? ' colspan="' + cs + '"' : ''; }
+
 // ════════════════════════════════════════
 // TABELA CK4
 // ════════════════════════════════════════
 function tableToHTMLCK4(tblEl) {
-  var tblGrid  = getChild(tblEl, 'tblGrid');
-  var numCols  = tblGrid ? tblGrid.children.length : 0;
+  var t = readTable(tblEl);
   var html = '<table border="1" cellpadding="1" cellspacing="1" style="width:100%;">\n';
-  if (numCols > 0) {
-    var widths = gridColWidths(tblGrid, numCols);
-    html += '\t<colgroup>';
-    for (var w = 0; w < numCols; w++) html += '<col style="width:' + widths[w] + '%;">';
-    html += '</colgroup>\n';
-  }
-  html += '\t<tbody>\n';
-
-  for (var i = 0; i < tblEl.children.length; i++) {
-    var row = tblEl.children[i];
-    if (getLN(row) !== 'tr') continue;
-
-    var filled  = numCols > 0 ? rowFilledCols(row) : 0;
-    var missing = numCols > 0 ? (numCols - filled) : 0;
-
-    var cellsHTML = [];
-    var lastCs = 1;
-    for (var j = 0; j < row.children.length; j++) {
-      var tc = row.children[j];
-      if (getLN(tc) !== 'tc' || isSkipRow(tc)) continue;
-      var cs = getColspan(tc);
-      lastCs = cs;
-      cellsHTML.push('\t\t\t<td' + (cs > 1 ? ' colspan="' + cs + '"' : '') + '>' + cellToHTML(tc) + '</td>\n');
+  html += '\t' + colgroupHTML(t) + '\n\t<tbody>\n';
+  for (var i = 0; i < t.rows.length; i++) {
+    html += '\t\t<tr>\n';
+    var cl = t.rows[i].cells;
+    for (var j = 0; j < cl.length; j++) {
+      html += '\t\t\t<td' + spanAttr(cl[j].cs) + '>' + cl[j].html + '</td>\n';
     }
-
-    if (missing > 0 && cellsHTML.length > 0) {
-      var lastIdx = cellsHTML.length - 1;
-      cellsHTML[lastIdx] = fixLastCellSpan(cellsHTML[lastIdx], lastCs, missing);
-    }
-
-    html += '\t\t<tr>\n' + cellsHTML.join('') + '\t\t</tr>\n';
+    html += '\t\t</tr>\n';
   }
   return html + '\t</tbody>\n</table>';
-}
-
-function docToHTMLCK4(bodyEl) {
-  var parts = [];
-  for (var i = 0; i < bodyEl.children.length; i++) {
-    var c = bodyEl.children[i], ln = getLN(c);
-    if (ln === 'p') {
-      var r = paraToHTML(c);
-      if (r.text.trim()) {
-        var style = r.align ? ' style="text-align:' + r.align + ';"' : '';
-        parts.push('<p' + style + '>' + r.text + '</p>');
-      }
-    }
-    else if (ln === 'tbl') parts.push(tableToHTMLCK4(c));
-  }
-  return parts.join('\n');
 }
 
 // ════════════════════════════════════════
 // TABELA CK5
 // ════════════════════════════════════════
 function tableToHTMLCK5(tblEl) {
-  var tblGrid = getChild(tblEl, 'tblGrid');
-  var numCols = tblGrid ? tblGrid.children.length : 1;
-  var widths  = gridColWidths(tblGrid, numCols);
-  var colgroup = '<colgroup>';
-  for (var i = 0; i < numCols; i++) colgroup += '<col style="width:' + widths[i] + '%;">';
-  colgroup += '</colgroup>';
-
+  var t = readTable(tblEl);
   var html = '<figure class="table" style="width:100%;">\n';
   html    += '<table class="ck-table-resized" style="border-style:solid;">\n';
-  html    += colgroup + '\n<tbody>\n';
-
-  for (var i = 0; i < tblEl.children.length; i++) {
-    var row = tblEl.children[i];
-    if (getLN(row) !== 'tr') continue;
-
-    var filled  = numCols > 0 ? rowFilledCols(row) : 0;
-    var missing = numCols > 0 ? (numCols - filled) : 0;
-
-    var cellsHTML = [];
-    var lastCs = 1;
-    for (var j = 0; j < row.children.length; j++) {
-      var tc = row.children[j];
-      if (getLN(tc) !== 'tc' || isSkipRow(tc)) continue;
-      var cs = getColspan(tc);
-      lastCs = cs;
-      cellsHTML.push('<td style="border-color:#000000;"' + (cs > 1 ? ' colspan="' + cs + '"' : '') + '>' + cellToHTML(tc) + '</td>\n');
+  html    += colgroupHTML(t) + '\n<tbody>\n';
+  for (var i = 0; i < t.rows.length; i++) {
+    html += '<tr>\n';
+    var cl = t.rows[i].cells;
+    for (var j = 0; j < cl.length; j++) {
+      html += '<td style="border-color:#000000;"' + spanAttr(cl[j].cs) + '>' + cl[j].html + '</td>\n';
     }
-
-    if (missing > 0 && cellsHTML.length > 0) {
-      var lastIdx = cellsHTML.length - 1;
-      cellsHTML[lastIdx] = fixLastCellSpan(cellsHTML[lastIdx], lastCs, missing);
-    }
-
-    html += '<tr>\n' + cellsHTML.join('') + '</tr>\n';
+    html += '</tr>\n';
   }
   return html + '</tbody>\n</table>\n</figure>';
 }
 
-function docToHTMLCK5(bodyEl) {
+// ════════════════════════════════════════
+// DOCUMENTO (paragrafos + tabelas do body)
+// ════════════════════════════════════════
+function docToHTML(bodyEl, mode) {
+  var tableFn = mode === 'ck5' ? tableToHTMLCK5 : tableToHTMLCK4;
   var parts = [];
-  for (var i = 0; i < bodyEl.children.length; i++) {
-    var c = bodyEl.children[i], ln = getLN(c);
-    if (ln === 'p') {
+  var kids = flatChildren(bodyEl, { p:1, tbl:1 });
+  for (var i = 0; i < kids.length; i++) {
+    var c = kids[i];
+    if (getLN(c) === 'p') {
       var r = paraToHTML(c);
       if (r.text.trim()) {
         var style = r.align ? ' style="text-align:' + r.align + ';"' : '';
         parts.push('<p' + style + '>' + r.text + '</p>');
       }
     }
-    else if (ln === 'tbl') parts.push(tableToHTMLCK5(c));
+    else parts.push(tableFn(c));
   }
   return parts.join('\n');
 }
@@ -594,19 +573,23 @@ function docToHTMLCK5(bodyEl) {
 // ════════════════════════════════════════
 // PROCESSAMENTO PRINCIPAL
 // ════════════════════════════════════════
+async function readZipText(zip, path) {
+  var f = zip.file(path);
+  return f ? await f.async('string') : null;
+}
+
 async function processDocx(arrayBuffer, mode) {
   var zip    = await JSZip.loadAsync(arrayBuffer);
-  var xmlStr = await zip.file('word/document.xml').async('string');
-  var doc    = parseXML(xmlStr);
-  var body   = doc.querySelector('body');
-  if (!body) {
-    var all = doc.documentElement.querySelectorAll('*');
-    for (var i = 0; i < all.length; i++) {
-      if ((all[i].localName || all[i].tagName).replace(/^.*:/, '') === 'body') { body = all[i]; break; }
-    }
+  var xmlStr = await readZipText(zip, 'word/document.xml');
+  if (!xmlStr) throw new Error('Documento invalido (sem word/document.xml).');
+  var doc  = parseXML(xmlStr);
+  var body = null;
+  var all  = doc.getElementsByTagName('*');
+  for (var i = 0; i < all.length; i++) {
+    if (getLN(all[i]) === 'body') { body = all[i]; break; }
   }
   if (!body) throw new Error('Documento invalido.');
-  return mode === 'ck5' ? docToHTMLCK5(body) : docToHTMLCK4(body);
+  return docToHTML(body, mode);
 }
 
 // ════════════════════════════════════════
