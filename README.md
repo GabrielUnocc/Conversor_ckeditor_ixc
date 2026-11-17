@@ -53,9 +53,10 @@ Acesse direto no navegador, sem instalar nada:
 
 1. **Escolha a versão** do seu editor — **CKEditor 5** ou **CKEditor 4** (primeiro passo, no topo do painel esquerdo). Em caso de dúvida, use o link "Não sabe qual é a versão do seu editor?"
 2. **Arraste o `.docx`** para a área de upload ou clique em **Selecionar arquivo**
-3. **Confira** o resultado na aba **Preview**
+3. **Revise** o resultado na aba **Preview** — a ferramenta mostra um aviso após cada conversão. Confira títulos, listas, tabelas e campos de assinatura: a conversão automática pode não reproduzir 100% do Word
 4. Clique em **Copiar HTML** (no topo do painel de resultado)
 5. No IXC Provedor: `Modelo de contrato` → botão `</>` (código-fonte) → seleciona tudo → cola → **OK** → **Salvar**
+6. **Imprima um PDF de teste** no IXC Provedor e confira antes de usar o modelo com clientes
 
 > A ferramenta reconverte automaticamente ao trocar de versão, então você pode comparar CK4 e CK5 sem recarregar o arquivo.
 
